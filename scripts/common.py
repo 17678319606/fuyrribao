@@ -14,7 +14,8 @@ SEEN_FILE = os.path.join(STATE_DIR, "seen.json")
 # —— 可调参数 ——
 RETENTION_DAYS = 60          # 数据文件 / 去重表的保留天数（到期自动清理）
 COLD_START_MAX_PER_SOURCE = 12  # 冷启动（首次运行）每个源最多取多少条，避免首期爆量
-MAX_CANDIDATES = 50          # 单日候选上限（保护 AI 上下文与文章长度）
+MAX_PER_SOURCE = 10          # 每个源每次最多保留多少条（保证多样性、控制 AI 上下文）
+MAX_CANDIDATES = 100         # 单日候选上限（保护 AI 上下文与文章长度）
 
 BJ = datetime.timezone(datetime.timedelta(hours=8))
 
