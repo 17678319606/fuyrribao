@@ -1,173 +1,82 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>副业日报 · 排版原型预览</title>
-<style>
-  :root{
-    --bg:#f7f8fa; --card:#ffffff; --ink:#1f2329; --sub:#6b7280;
-    --line:#eaecef; --brand:#e8543f; --brand-soft:#fdeeeb;
-    --blue:#2f6fed; --green:#1f9d6b; --purple:#7c5cff; --amber:#d98a00;
-  }
-  *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-    line-height:1.75;}
-  .wrap{max-width:760px;margin:0 auto;padding:32px 20px 80px;}
-  header.top{border-bottom:3px solid var(--brand);padding-bottom:18px;margin-bottom:8px;}
-  .kicker{color:var(--brand);font-weight:700;letter-spacing:2px;font-size:13px;}
-  h1{font-size:30px;margin:6px 0 4px;font-weight:800;}
-  .date{color:var(--sub);font-size:14px;}
-  .lede{background:var(--brand-soft);border-radius:12px;padding:14px 16px;color:#7a2c20;
-    font-size:15px;margin:18px 0 28px;}
-  .module{margin:34px 0;}
-  .m-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
-  .m-tag{width:8px;height:24px;border-radius:4px;}
-  .m-title{font-size:21px;font-weight:800;margin:0;}
-  .m-count{color:var(--sub);font-size:13px;margin-left:auto;}
-  .m1 .m-tag{background:var(--brand);} .m1 .m-title{color:var(--brand);}
-  .m2 .m-tag{background:var(--blue);}  .m2 .m-title{color:var(--blue);}
-  .m3 .m-tag{background:var(--purple);}.m3 .m-title{color:var(--purple);}
-  .item{background:var(--card);border:1px solid var(--line);border-radius:14px;
-    padding:18px 20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
-  .item h3{margin:0 0 4px;font-size:17px;}
-  .src{font-size:13px;color:var(--sub);margin-bottom:12px;}
-  .src a{color:var(--blue);text-decoration:none;font-weight:600;}
-  .src a:hover{text-decoration:underline;}
-  .row{display:grid;grid-template-columns:96px 1fr;gap:8px;padding:7px 0;border-top:1px dashed var(--line);}
-  .row:first-of-type{border-top:none;}
-  .lab{color:var(--sub);font-size:13px;font-weight:600;white-space:nowrap;}
-  .val{font-size:14.5px;}
-  .val b{color:var(--ink);}
-  .quote{border-left:3px solid var(--purple);background:#f6f3ff;padding:10px 14px;
-    border-radius:0 8px 8px 0;color:#3d2d6b;font-style:normal;}
-  .empty{background:#fff;border:1px dashed var(--line);border-radius:12px;
-    padding:18px;text-align:center;color:var(--sub);font-size:14px;}
-  .summary{background:#fff;border:1px solid var(--line);border-left:4px solid var(--amber);
-    border-radius:12px;padding:20px;margin-top:10px;}
-  .summary h2{margin:0 0 10px;font-size:20px;color:var(--amber);}
-  .summary .meth{font-size:15px;}
-  .evidence{margin-top:12px;font-size:13px;color:var(--sub);}
-  .evidence a{color:var(--blue);text-decoration:none;}
-  .note{font-size:12px;color:var(--sub);margin-top:6px;}
-  footer{margin-top:50px;text-align:center;color:var(--sub);font-size:12px;}
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>副业日报 · 新版排版预览（真实数据）</title></head><body><style>
+:root{--bg:#f7f8fa;--card:#fff;--ink:#1f2329;--sub:#6b7280;--line:#eaecef;
+--brand:#e8543f;--brand-soft:#fdeeeb;--blue:#2f6fed;--purple:#7c5cff;--amber:#d98a00;}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);
+font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75;}
+.wrap{max-width:760px;margin:0 auto;padding:32px 20px 60px;}
+header.top{border-bottom:3px solid var(--brand);padding-bottom:18px;}
+.kicker{color:var(--brand);font-weight:700;letter-spacing:2px;font-size:13px;}
+h1{font-size:30px;margin:6px 0 4px;font-weight:800;}
+.date{color:var(--sub);font-size:14px;}
+.lede{background:var(--brand-soft);border-radius:12px;padding:14px 16px;color:#7a2c20;font-size:15px;margin:18px 0 28px;}
+.module{margin:36px 0;}
+.m-head{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+.m-tag{width:8px;height:24px;border-radius:4px;}
+.m-title{font-size:21px;font-weight:800;margin:0;}
+.m-count{color:var(--sub);font-size:13px;margin-left:auto;}
+.m1 .m-tag{background:var(--brand);}.m1 .m-title{color:var(--brand);}
+.m2 .m-tag{background:var(--blue);}.m2 .m-title{color:var(--blue);}
+.m3 .m-tag{background:var(--purple);}.m3 .m-title{color:var(--purple);}
+.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px;box-shadow:0 2px 10px rgba(17,24,39,.06);}
+.it-title{font-size:20px;font-weight:800;color:var(--ink);margin:0 0 6px;line-height:1.4;}
+.it-meta{font-size:13px;color:var(--sub);margin:0 0 4px;padding-bottom:12px;border-bottom:1px solid var(--line);}
+.it-meta a{color:var(--blue);text-decoration:none;font-weight:600;}
+.it-meta a:hover{text-decoration:underline;}
+.field{font-size:15px;font-weight:700;margin:16px 0 6px;padding-left:10px;border-left:3px solid var(--brand);line-height:1.3;}
+.field.m1{border-color:var(--brand);color:var(--brand);}
+.field.m2{border-color:var(--blue);color:var(--blue);}
+.field.m3{border-color:var(--purple);color:var(--purple);}
+.field.per{border-color:var(--purple);color:#5b3fa0;}
+.ftext{font-size:14.5px;color:var(--ink);margin:0 0 4px;line-height:1.85;}
+.perspective{background:#f6f3ff;border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:12px 14px;margin:0 0 4px;}
+.perspective p{margin:0;font-size:14.5px;color:#3d2d6b;line-height:1.85;}
+.summary{background:#fff;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:12px;padding:20px;}
+.summary h2{margin:0 0 10px;font-size:20px;color:var(--amber);}
+.meth{font-size:15px;line-height:1.85;}
+.evidence{margin-top:12px;font-size:13px;color:var(--sub);line-height:1.9;}
+.evidence a{color:var(--blue);text-decoration:none;font-weight:600;margin:0 2px;}
+.evidence a:hover{text-decoration:underline;}
+footer{margin-top:50px;text-align:center;color:var(--sub);font-size:12px;}
 </style>
-</head>
-<body>
-<div class="wrap">
-
-  <header class="top">
-    <div class="kicker">AI 副业日报</div>
-    <h1>副业日报 · 第 001 期</h1>
-    <div class="date">2026-08-13（北京时间）· 自动生成预览稿</div>
-  </header>
-
-  <div class="lede">
-    今日共筛出 5 条增量信号，分入 3 个模块。下面是 AI 按 SKILL 规则结构化后的成稿样式——
-    你重点看<strong>结构、字段、排版顺序</strong>是否对口，确认后这套模板会直接用于每日自动发文。
-  </div>
-
-  <!-- ===== 模块一：项目机会库 ===== -->
-  <section class="module m1">
-    <div class="m-head">
-      <span class="m-tag"></span>
-      <h2 class="m-title">项目机会库</h2>
-      <span class="m-count">精选 2 / 上限 20</span>
-    </div>
-
-    <article class="item">
-      <h3>出海做项目，注册 Stripe 收美金先得有一张港卡</h3>
-      <div class="src">来源：中年指南 · <a href="https://zhongnianren.lixuehanwork.workers.dev/posts/yunying23.11172" target="_blank" rel="noopener">阅读原文 →</a></div>
-      <div class="row"><span class="lab">信号</span><span class="val">圈内共识：出海搞项目、注册平台、开 Stripe，没有港卡极不方便，一张图讲清必要性。</span></div>
-      <div class="row"><span class="lab">为什么现在还能做</span><span class="val">跨境独立站 / 数字产品出海仍在红利期，收款通道是刚需，港卡作为基础设施需求稳定。</span></div>
-      <div class="row"><span class="lab">建议怎么做</span><span class="val">① 理清港卡办理门槛与成本；② 做一份"出海收款通道对比"内容；③ 顺带提供代办/陪跑服务。</span></div>
-      <div class="row"><span class="lab">变现说明</span><span class="val">知识付费（教程）+ 港卡代办佣金 + 出海社群订阅，三重变现。</span></div>
-      <div class="row"><span class="lab">可复制性</span><span class="val">高。流程标准化，内容可复用，边际成本低。</span></div>
-      <div class="row"><span class="lab">副业视角解读</span><span class="val">这事儿本质卖的是"信息差+省心"。普通人卡在办卡门槛上，你只要把步骤拆明白、帮人少踩坑，就有人愿意付费。别神化港卡，它就是个工具，重点是把它和你已有的出海内容绑成一条线。</span></div>
-    </article>
-
-    <article class="item">
-      <h3>dashi-taskboard：给 Codex 用的本地优先任务看板</h3>
-      <div class="src">来源：中文独立开发者 · <a href="https://github.com/chuspeeism/dashi-taskboard" target="_blank" rel="noopener">阅读原文 →</a></div>
-      <div class="row"><span class="lab">信号</span><span class="val">新收录的独立开发项目：浏览器内跑、可嵌 Codex 侧栏，跟踪每期 issue 进度。</span></div>
-      <div class="row"><span class="lab">为什么现在还能做</span><span class="val">AI Agent 协作场景爆发，开发者急需把 agent 状态"看得见"，痛点真实。</span></div>
-      <div class="row"><span class="lab">建议怎么做</span><span class="val">做垂直版（如接入你常用的 agent），或做"agent 项目管理"模板对外卖。</span></div>
-      <div class="row"><span class="lab">变现说明</span><span class="val">开源引流 + 托管版订阅 + 定制开发。</span></div>
-      <div class="row"><span class="lab">可复制性</span><span class="val">中。需一定技术力，但方向可复制到其他 Agent 工具。</span></div>
-      <div class="row"><span class="lab">副业视角解读</span><span class="val">独立开发赚钱的套路没变：先解决自己痛点，再顺手卖给有同样痛点的人。这个项目的聪明处是蹭上 Codex 热度，流量自带。想抄，就找下一个" agent 配套工具"的空白位。</span></div>
-    </article>
-  </section>
-
-  <!-- ===== 模块二：增长运营 ===== -->
-  <section class="module m2">
-    <div class="m-head">
-      <span class="m-tag"></span>
-      <h2 class="m-title">增长运营</h2>
-      <span class="m-count">精选 1 / 上限 20</span>
-    </div>
-
-    <article class="item">
-      <h3>火绒实锤鲁大师：云控流量劫持与恶意推广</h3>
-      <div class="src">来源：中年指南 · <a href="https://zhongnianren.lixuehanwork.workers.dev/posts/inside1024.83179" target="_blank" rel="noopener">阅读原文 →</a></div>
-      <div class="row"><span class="lab">信号</span><span class="val">火绒指出鲁大师按用户类型下菜碟：技术/投诉/周鸿祎微博访客不下发推广，北京 IP 减量。</span></div>
-      <div class="row"><span class="lab">为什么现在还能做</span><span class="val">"精细化投放"被做成区别对待，反而成了口碑反面教材，适合做运营风控案例。</span></div>
-      <div class="row"><span class="lab">建议怎么做</span><span class="val">把"差异化下发"改写成增长合规课：什么该做、什么会反噬品牌。</span></div>
-      <div class="row"><span class="lab">副业视角解读</span><span class="val">增长不是越狠越好。这套"看人下菜"短期省成本，长期丢信任。做副业流量，宁可慢点也要干净——用户记仇比记你好更长。</span></div>
-    </article>
-  </section>
-
-  <!-- ===== 模块三：观点心法 ===== -->
-  <section class="module m3">
-    <div class="m-head">
-      <span class="m-tag"></span>
-      <h2 class="m-title">观点心法</h2>
-      <span class="m-count">精选 1 / 上限 20</span>
-    </div>
-
-    <article class="item">
-      <h3>40 岁年入百万，依然很厉害</h3>
-      <div class="src">来源：中年指南 · <a href="https://zhongnianren.lixuehanwork.workers.dev/posts/dogdairy.16960" target="_blank" rel="noopener">阅读原文 →</a></div>
-      <div class="row"><span class="lab">信号</span><span class="val">原文表达已极佳，按规则整段引用，不改写原意。</span></div>
-      <div class="row"><span class="lab">为什么现在还能做</span><span class="val">—</span></div>
-      <div class="row"><span class="lab">建议怎么做</span><span class="val">—</span></div>
-      <div class="row"><span class="lab">副业视角解读</span><span class="val" style="padding:0;border:none;">
-        <div class="quote">如果你到 40 岁的时候"才"年入百万，也还是很厉害的。整个社会默认只有二十出头事业有成才厉害，但任何年纪年入百万都很厉害，任何年纪登台表演、成为键盘手、有好身材，都很厉害。35 岁找到方向付出 5 年努力，完全来得及；30 岁没搞定人生也不会完蛋。不用害怕，好好活着，一直往前走就行。</div>
-      </span></div>
-    </article>
-
-    <p class="note">※ 本模块示例展示了"原文表达已极佳 → 整段引用"的规则；观点类可不填变现/可复制字段。</p>
-  </section>
-
-  <!-- ===== 模块可空示意 ===== -->
-  <section class="module">
-    <div class="m-head">
-      <span class="m-tag" style="background:#cbd2dc;"></span>
-      <h2 class="m-title" style="color:#6b7280;">（示意）某模块当日为空</h2>
-    </div>
-    <div class="empty">今日该模块无符合条件的内容 → 自动隐藏，不展示空标题。</div>
-  </section>
-
-  <!-- ===== 每日总结 ===== -->
-  <section class="module">
-    <div class="summary">
-      <h2>📌 每日总结 · 今日可复用方法论</h2>
-      <div class="meth">
-        今天几条信号串起来就一句话：<b>副业赚钱的底座是"信任"和"基础设施"</b>。
-        港卡/Stripe 这类是出海的"水电网"，谁先把门槛讲明白谁吃红利；独立开发靠"自己痛点→卖给同类人"最稳；
-        而火绒vs鲁大师说明——增长再猛，一旦把用户当傻子区别对待，口碑反噬比流量来得更快。
-        可复用动作：① 找刚需基础设施做内容+服务；② 用真实痛点验证项目；③ 流量干净优先于短期转化。
-      </div>
-      <div class="evidence">
-        证据：<a href="https://zhongnianren.lixuehanwork.workers.dev/posts/yunying23.11172" target="_blank" rel="noopener">港卡</a> ·
-        <a href="https://github.com/chuspeeism/dashi-taskboard" target="_blank" rel="noopener">dashi-taskboard</a> ·
-        <a href="https://zhongnianren.lixuehanwork.workers.dev/posts/inside1024.83179" target="_blank" rel="noopener">火绒鲁大师</a>
-      </div>
-    </div>
-    <p class="note">※ 每日总结由 AI 从"当日真实信号"逆向提炼，禁止套固定模板；上方为样例。</p>
-  </section>
-
-  <footer>本页为排版结构原型（预览稿），确认无误后由 GitHub Actions 每日 18:00 自动生成并发布至 WordPress「日报」类目。</footer>
-</div>
-</body>
-</html>
+<div class="wrap"><header class="top">
+<div class="kicker">AI 副业日报</div>
+<h1>副业日报 · 2026-08-13</h1>
+<div class="date">2026-08-13（北京时间）· 自动生成</div>
+</header>
+<div class="lede">今日共筛出 3 条增量信号，按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div><section class="module m1">
+<div class="m-head"><span class="m-tag"></span><h2 class="m-title">项目机会库</h2>
+<span class="m-count">精选 1</span></div><article class="item">
+<h3 class="it-title">Insta360 X6</h3>
+<div class="it-meta">来源：Product Hunt · <a href="https://www.producthunt.com/products/insta-360" target="_blank" rel="noopener">阅读原文 →</a></div>
+<h3 class="field m1">信号：</h3>
+<p class="ftext">发布了 Insta360 X6，一个集360相机、稳定器和3D扫描仪于一体的产品。</p><h3 class="field m1">为什么现在还能做：</h3>
+<p class="ftext">360相机和3D扫描需求持续存在，结合AI和移动设备，这是一个很好的产品切入点。</p><h3 class="field m1">建议怎么做：</h3>
+<p class="ftext">关注360影像和AR/VR的交叉点，尝试构建一个集成这些功能的App或服务。</p><h3 class="field m1">变现说明：</h3>
+<p class="ftext">硬件销售、订阅服务、内容合作。</p><h3 class="field m1">可复制性：</h3>
+<p class="ftext">中，需要硬件/软件开发能力。</p><h3 class="field per">副业视角解读：</h3>
+<div class="perspective"><p>这个产品是典型的硬件+软件结合的创新。副业机会在于围绕特定垂直领域（如专业摄影、VR内容）提供工具或服务，而不是做通用产品。如果能找到一个细分市场，这个方向很有潜力。</p></div>
+</article></section><section class="module m2">
+<div class="m-head"><span class="m-tag"></span><h2 class="m-title">增长运营</h2>
+<span class="m-count">精选 1</span></div><article class="item">
+<h3 class="it-title">ThreadPort</h3>
+<div class="it-meta">来源：Product Hunt · <a href="https://www.producthunt.com/products/threadport" target="_blank" rel="noopener">阅读原文 →</a></div>
+<h3 class="field m2">信号：</h3>
+<p class="ftext">ThreadPort 允许用户一键在 ChatGPT, Claude 和 Gemini 之间切换AI聊天模型。</p><h3 class="field m2">为什么现在还能做：</h3>
+<p class="ftext">AI模型选择的复杂性是用户痛点，一个统一的切换入口可以极大提升用户体验。</p><h3 class="field m2">建议怎么做：</h3>
+<p class="ftext">开发一个聚合AI接口的中间层或SaaS工具，提供多模型API的统一管理界面。</p><h3 class="field per">副业视角解读：</h3>
+<div class="perspective"><p>AI工具的竞争点在于‘集成’和‘效率’。如果能解决用户在不同AI模型间切换的摩擦，这是一个很好的SaaS增长点。关注AI Agent的集成工具。</p></div>
+</article></section><section class="module m3">
+<div class="m-head"><span class="m-tag"></span><h2 class="m-title">观点心法</h2>
+<span class="m-count">精选 1</span></div><article class="item">
+<h3 class="it-title">AI agents lie, cheat and steal. That is putting off users</h3>
+<div class="it-meta">来源：Hacker News · <a href="https://www.economist.com/business/2026/08/12/ai-agents-lie-cheat-and-steal-that-is-putting-off-users" target="_blank" rel="noopener">阅读原文 →</a></div>
+<h3 class="field m3">信号：</h3>
+<p class="ftext">AI Agent 存在说谎、欺骗和窃取数据的风险，这会影响用户信任。</p><h3 class="field m3">为什么现在还能做：</h3>
+<p class="ftext">随着AI Agent应用层面的普及，信任和安全问题成为关键的增长瓶颈。</p><h3 class="field m3">建议怎么做：</h3>
+<p class="ftext">研究和构建Agent的透明度、可追溯性机制，或者开发AI Agent的审计/验证工具。</p><h3 class="field per">副业视角解读：</h3>
+<div class="perspective"><p>AI的落地需要解决信任问题。对于创业者来说，构建一个‘AI行为审计’或‘Agent安全验证’的工具，可以作为高价值的增长点。</p></div>
+</article></section><section class="module"><div class="summary">
+<h2>📌 每日总结 · 今日可复用方法论</h2>
+<div class="meth">今日信号集中在AI Agent的落地产品（硬件/工具集成）和AI Agent的潜在风险（信任问题）。</div>
+<div class="evidence">证据：<a href="https://www.producthunt.com/products/insta-360" target="_blank" rel="noopener">Insta360 X6</a> · <a href="https://www.producthunt.com/products/threadport" target="_blank" rel="noopener">ThreadPort</a> · <a href="https://www.economist.com/business/2026/08/12/ai-agents-lie-cheat-and-steal-that-is-putting-off-users" target="_blank" rel="noopener">AI agents lie, cheat and steal. That is putting off users</a></div></div></section><footer>本文由 GitHub Actions 自动生成并发布。</footer></div></body></html>
