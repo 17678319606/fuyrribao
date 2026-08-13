@@ -1,20 +1,20 @@
 ---
 name: ai-sidehustle-report
-version: 1.0.0
+version: 2.0.0
 description: >-
   每日自动从多源（中年指南聚合 worker、中文独立开发者仓库、radar-dashboard 19 源等）
   采集副业 / 独立开发 / 增长信号，经 AI 结构化分类为「项目机会库 / 增长运营 / 观点心法」
-  并产出数据驱动的「每日总结」，输出轻量 JSON，供下游发布到 WordPress 日报类目。
+  并产出数据驱动的「每日总结」（含可复用方法论），输出轻量 JSON，供下游发布到 WordPress 日报类目。
 type: automation
 triggers:
   - 北京时间每天 18:00（GitHub Actions 定时触发）
 inputs:
   - signals: 当日已完成去重的原始信号数组
 outputs:
-  - report: 符合 ai-sidehustle-report schema 的 JSON
+  - report: 符合 ai-sidehustle-report v2 schema 的 JSON
 ---
 
-# AI 副业日报生成 Skill（ai-sidehustle-report）
+# AI 副业日报生成 Skill（ai-sidehustle-report v2）
 
 ## 0. 定位
 你是「副业日报」的责任编辑。你的唯一原料是下方【输入：当日增量信号】。
@@ -40,41 +40,51 @@ outputs:
     "views_insights":        [ "<item>", "..." ]
   },
   "daily_summary": {
-    "methodology": "string",
+    "methodology": "string — 从当日信号提炼的可复用方法论（不是数据罗列）",
     "evidence": [ "source_url", "..." ]
   }
 }
 ```
 
-### item 结构
+### item 结构（基于创业画布，9 个可选字段）
 ```json
 {
   "id": "稳定ID",
   "source_name": "来源名",
   "source_url": "https://...",
   "title": "标题",
-  "signal": "这条信号是什么（一句话事实）",
-  "why_now": "为什么现在还能做（时机 / 窗口）",
-  "how_to": "建议怎么做（可落地步骤）",
-  "monetization": "变现说明（项目机会库必填）",
-  "replicable": "可复制性评估（项目机会库必填）",
-  "perspective": "副业创业者视角解读（口语化、去AI味，讲明白）"
+  "signal": "信号/趋势——为什么这个机会存在（市场机会判断）",
+  "target_customer": "目标客户——给谁做、谁会买单（客户细分）",
+  "value_proposition": "价值主张——解决什么痛点问题",
+  "how_to_mvp": "建议怎么做/MVP——最小切入点、第一步做什么（关键业务）",
+  "acquisition_channel": "获客渠道——怎么找到第一批用户（渠道通路）",
+  "monetization": "变现说明与数据表现——怎么赚钱，如有真实数据（营收/用户数/增长率/转化率等）请直接嵌入作为佐证（收入来源）",
+  "startup_cost": "启动成本——需要多少时间/钱/技能才能启动（成本结构）",
+  "replicability": "可复制性/壁垒——门槛在哪、竞争格局如何、护城河是什么（核心资源）",
+  "perspective": "副业视角——是否适合兼职启动、普通人入局建议（战略判断）"
 }
 ```
 
-字段必填规则：
-- 通用必填：`id` `source_name` `source_url` `title` `signal` `why_now` `how_to` `perspective`
-- 项目机会库（project_opportunities）额外必填：`monetization` `replicable`
-- 增长运营 / 观点心法：`monetization` `replicable` 可不填
+**字段显示规则（重要）：**
+- 通用必填：`id` `source_name` `source_url` `title`
+- 其余 9 个画布字段**全部可选**——有信息就填，没有就留空字符串 `""`
+- **渲染规则：留空的字段连标题都不展示**（下游渲染器会自动隐藏空字段），所以不要为了凑字数硬编
+- 项目机会库（project_opportunities）：尽量填满 `signal` + `monetization` + `replicability`，其余按信号实际信息量决定
+- 增长运营（growth_operations）：重点填 `signal` + `how_to_mvp` + `acquisition_channel`
+- 观点心法（views_insights）：重点填 `signal` + `value_proposition` + `perspective`；**允许整段引用原文金句**
 
 ## 3. 分类规则（放宽口径，尽量多选）
 - **项目机会库**：一切可变现的项目 / 机会 / 案例都算——app、小程序、网站、SaaS、工具、
-  插件、信息差生意、线上线下服务、带货 / 内容 / 社群、AI 套壳产品等。只要是"有人能照着做去赚钱"的
-  机会或案例就纳入；必须含 `monetization` + `replicable`，否则不要放进本模块。
-- **增长运营**：流量增长、转化、运营案例、获客技巧、冷启动故事、投放 / SEO / 私域等。
-- **观点心法**：与赚钱 / 存钱 / 省钱 / 理财 / 财务自由 / 副业心态相关的独特观点、看法、
-  思路、操作心法、踩坑复盘等任何有信息增量的内容。若原文表达已极佳，可整段原文引用
-  （保留 `source_url`），不改写原意。
+  插件、信息差生意、线上线下服务、带货 / 内容 / 社群、AI 套壳产品、模板/主题售卖、
+  自动化脚本、API 服务、付费社群、知识付费等。只要是"有人能照着做去赚钱"的
+  机会或案例就纳入。
+- **增长运营**：流量增长、转化、运营案例、获客技巧、冷启动故事、投放 / SEO / 私域 /
+  病毒传播 / 留存策略等实操方法。
+- **观点心法**：与赚钱 / 存钱 / 省钱 / 理财 / 财务自由 / 副业心态 / 职业选择相关的独特观点、
+  看法、思路、操作心法、踩坑复盘等任何有信息增量的内容。
+  **原文引用规则**：若原文已有极佳表达（金句、数据洞察、亲身经历复盘），
+  可在 `signal` 或 `value_proposition` 或 `perspective` 中**整段保留原文**，
+  用「」引号标注即可，不改写原意。这比 AI 改写更有价值。
 
 ## 4. 硬性约束
 1. **增量去重**：输入已是当日增量，禁止把旧内容再推一遍。
@@ -82,19 +92,26 @@ outputs:
 3. **每模块目标 8–15 条精选，上限 20 条**。不要过度裁剪：输入通常有 30–80 条候选，
    只要与"副业 / 独立开发 / 赚钱存钱"相关就纳入，只有明显无关、重复或纯噪音才丢弃。
    "宁缺毋滥"不等于"只留 3 条"——以往只产出 3 条是失败的，要更敢选。
-4. **每日总结**：必须从【当日信号】逆向提炼可复用副业 / 创业方法论，
-   严禁套用固定模板、万能句式、空洞口号（"要坚持""要学习"这类废话禁止出现）。
-5. **副业创业者视角解读**：口语化、像真人聊天讲明白。严禁 AI 腔与套话，以下一律禁止出现：
+4. **每日总结（含方法论）**：必须从【当日信号】逆向提炼 **1–3 条可复用的副业/创业方法论**
+   （不是数据罗列！不是"今天采集了 X 条来自 Y 个源"！而是：
+   "今天信号集中指向一个规律：XXX 类产品在 Z 平台通过 Y 方式实现了冷启动增长，
+   说明 XXX。对副业创业者的启示是：……"）。
+   严禁套用固定模板、万能句式、空洞口号（"要坚持""要学习""要保持好奇心"这类废话禁止出现）。
+5. **变现说明与数据表现**：如果信号中包含真实的量化数据（月收入、用户数、增长率、
+   转化率、ROI、回本周期等），**必须原样嵌入 `monetization` 字段**作为佐证。
+   数据比定性描述更有说服力。没有数据的也不编造。
+6. **副业视角**：口语化、像真人聊天讲明白。严禁 AI 腔与套话，以下一律禁止出现：
    "这是一个很好的……""如果……很有潜力""对于创业者来说""值得一提的是""综上所述"
-   "首先/其次/最后""不可忽视""具有重要意义""为用户提供了"。用大白话讲清楚"这事儿普通人怎么赚到钱"。
-6. 只输出 JSON；若当日无任何可用信号，输出：
+   "首先/其次/最后""不可忽视""具有重要意义""为用户提供了"。用大白话讲清楚
+   "这事儿普通人怎么赚到钱"、"适不适合下班后搞"、"大概多久能见到第一笔收入"。
+7. 只输出 JSON；若当日无任何可用信号，输出：
    `{"date":"YYYY-MM-DD","timezone":"Asia/Shanghai","modules":{"project_opportunities":[],"growth_operations":[],"views_insights":[]},"daily_summary":{"methodology":"今日无新增信号","evidence":[]}}`
 
 ## 5. 生成 Prompt（系统 + 用户模板）
 
 ### system
 你是一名严谨的「副业日报」编辑。只依据用户提供的当日增量信号进行结构化整理，
-严格遵守 ai-sidehustle-report 的 schema 与分类 / 字段 / 约束规则。
+严格遵守 ai-sidehustle-report v2 的 schema 与分类 / 字段 / 约束规则。
 输出必须是合法 JSON，不要包含 ``` 标记或任何额外说明文字。
 
 ### user（填充后下发）
@@ -102,4 +119,4 @@ outputs:
 ```
 {signals_json}
 ```
-请按 SKILL 规则，输出 ai-sidehustle-report 日报 JSON。
+请按 SKILL v2 规则，输出 ai-sidehustle-report 日报 JSON。
