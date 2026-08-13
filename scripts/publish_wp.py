@@ -273,16 +273,20 @@ def get_category_id(session, base, auth, name):
 
 
 def find_existing_post(session, base, auth, title):
-    """返回与今日标题匹配的已发布文章 id（无则 None），供防重复/强制更新判断。"""
+    """返回 (文章id, 内容HTML)；无匹配返回 (None, '')。供防重复/强制更新/自愈判断。"""
     import requests
-    r = session.get(base + "/wp-json/wp/v2/posts",
-                    params={"search": title, "status": "publish"},
-                    headers=auth, timeout=30)
-    r.raise_for_status()
+    try:
+        r = session.get(base + "/wp-json/wp/v2/posts",
+                        params={"search": title, "status": "publish"},
+                        headers=auth, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        LOG.warning("查询已存在文章失败：%s", e)
+        return None, ""
     for p in r.json():
         if title in p.get("title", {}).get("rendered", ""):
-            return p["id"]
-    return None
+            return p["id"], p.get("content", {}).get("rendered", "")
+    return None, ""
 
 
 def main():
@@ -312,11 +316,14 @@ def main():
     auth = {"Authorization": "Basic " + base64.b64encode(
         f"{user}:{app_pw}".encode()).decode(), "Content-Type": "application/json"}
 
-    existing_id = find_existing_post(session, base, auth, title)
+    existing_id, existing_html = find_existing_post(session, base, auth, title)
     force = os.environ.get("FORCE_UPDATE") == "1"
+    # 自愈：若已发布文章残缺/为空（无卡片），即便非强制也覆盖修复
+    broken = bool(existing_id) and ("shr-card" not in existing_html) and ("<article" not in existing_html)
     if existing_id:
-        if force:
-            LOG.info("检测到今日文章(%s)，FORCE_UPDATE 模式：用新内容更新。", existing_id)
+        if force or broken:
+            reason = "FORCE_UPDATE" if force else "已发布文章残缺，自愈覆盖"
+            LOG.info("检测到今日文章(%s)，%s：用新内容更新。", existing_id, reason)
             try:
                 cat_id = get_category_id(session, base, auth, cat_name)
             except Exception as e:
@@ -329,10 +336,10 @@ def main():
                              json=payload, headers=auth, timeout=60)
             r.raise_for_status()
             link = r.json().get("link", "")
-            LOG.info("已更新(强制): %s", link)
+            LOG.info("已更新: %s", link)
             print("PUBLISHED_URL=" + link)
             return
-        LOG.info("今日文章已存在，跳过发布（防重复）。")
+        LOG.info("今日文章已存在且完整，跳过发布（防重复）。")
         return
 
     try:

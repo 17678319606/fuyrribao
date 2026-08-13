@@ -31,7 +31,8 @@ DATA_DIR = C.DATA_DIR
 
 RETRY_PER_ENDPOINT = 4      # 每个候选端点（直连 / 代理）的最大尝试次数
 BACKOFF_BASE = 3            # 退避基数（秒），呈指数增长：3 / 6 / 12 / 24s
-REQ_TIMEOUT = (15, 300)     # (connect, read)；read 放宽到 300s 以容纳流式长生成
+REQ_TIMEOUT = (15, 180)     # (connect, read)；read 180s 足够容纳流式长生成，且不超过 job 超时
+GEN_RETRIES = 3             # main() 外层生成级重试：应对空生成 / 解析失败 / 结构不完整
 MAX_INPUT_SIGNALS = 40      # 送入 AI 的候选上限（控制输入上下文，给源站减负）
 MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生成耗时，避免 Cloudflare 524）
 
@@ -93,31 +94,32 @@ _DNS_PATCH_HOSTS = {}
 
 
 def _doh_resolve(host):
-    """通过 DoH 解析 A 记录，返回 IP 列表。Google GET 优先（稳定），Cloudflare POST 兜底。"""
+    """通过 DoH 解析 A 记录，返回 IP 列表。多 provider 轮换，任一成功即可（提升抖动容错）。"""
     import urllib.request
-    # 1) Google DoH（GET，最稳）
-    try:
-        g = urllib.request.Request("https://dns.google/resolve?name=" + host + "&type=A")
-        with urllib.request.urlopen(g, timeout=10) as r:
-            d = json.loads(r.read())
-        ips = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
-        if ips:
-            return ips
-    except Exception as e:
-        LOG.warning("Google DoH 解析 %s 失败: %s", host, e)
-    # 2) Cloudflare DoH（POST）
-    try:
-        q = json.dumps({"name": host, "type": 1}).encode()
-        req = urllib.request.Request(
-            "https://cloudflare-dns.com/dns-query", data=q,
-            headers={"Content-Type": "application/dns-json",
-                      "Accept": "application/dns-json"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            d = json.loads(r.read())
-        return [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
-    except Exception as e:
-        LOG.warning("Cloudflare DoH 解析 %s 失败: %s", host, e)
-    return []
+    providers = [
+        ("Google",     "https://dns.google/resolve?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+        ("Cloudflare", "https://cloudflare-dns.com/dns-query?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+        ("1.1.1.1",    "https://1.1.1.1/dns-query?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+    ]
+    ips = []
+    for name, url, hdr in providers:
+        try:
+            req = urllib.request.Request(url, headers=hdr)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                d = json.loads(r.read())
+            found = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
+            if found:
+                LOG.info("DoH(%s) 解析 %s -> %s", name, host, found)
+                ips.extend(found)
+        except Exception as e:
+            LOG.warning("DoH(%s) 解析 %s 失败: %s", name, host, e)
+    # 去重保序
+    seen, uniq = set(), []
+    for ip in ips:
+        if ip not in seen:
+            seen.add(ip)
+            uniq.append(ip)
+    return uniq
 
 
 def _install_dns_patch(host):
@@ -247,7 +249,25 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                 last_err = e
                 LOG.error("AI 返回结构异常：%s", e)
                 raise
-    raise RuntimeError(f"所有候选端点（{len(cands)}）均失败，最后错误：{last_err}")
+    # ── 兜底：非流式请求 ──
+    # 流式偶发被网关/CF 中途掐断且多端点重试仍失败时，尝试一次非流式（整包返回，规避分块截断）
+    # 风险：生成耗时可能触发 Cloudflare 524；故仅作最后兜底，且用较短 read 超时快速失败
+    try:
+        LOG.info("流式多端点重试均失败，尝试非流式兜底请求（整包返回）")
+        nb_payload = dict(payload)
+        nb_payload["stream"] = False
+        r2 = requests.post(url, headers=headers, json=nb_payload,
+                           proxies=None, timeout=(15, 160))
+        r2.raise_for_status()
+        msg = (r2.json().get("choices", [{}])[0]
+               .get("message", {}).get("content", ""))
+        if msg and _extract_json(msg) is not None:
+            LOG.info("非流式兜底成功（约 %d 字）", len(msg))
+            return msg
+        LOG.warning("非流式兜底返回内容无法解析为 JSON")
+    except Exception as e:
+        LOG.warning("非流式兜底请求失败：%s", e)
+    raise RuntimeError(f"所有候选端点（{len(cands)}）流式+非流式兜底均失败，最后错误：{last_err}")
 
 
 def _extract_json(text):
@@ -378,14 +398,45 @@ def main():
         LOG.error("缺少 AI_API_KEY（Secret AI_SIDEHUSTLE_API_KEY 未注入），无法生成。")
         raise SystemExit("missing AI key")
 
-    content = _call_ai(base_url, api_key, model, system_prompt, user_prompt)
+    # 3) 调用 AI（外层生成级重试：应对空生成 / 解析失败 / 结构不完整）
+    content = None
+    report = None
+    for gen in range(1, GEN_RETRIES + 1):
+        try:
+            content = _call_ai(base_url, api_key, model, system_prompt, user_prompt)
+        except Exception as e:
+            LOG.error("AI 调用失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
+            if gen < GEN_RETRIES:
+                time.sleep(BACKOFF_BASE)
+                continue
+            raise SystemExit("AI call failed after retries")
+        report = _extract_json(content)
+        if report is None:
+            LOG.error("AI 返回无法解析为 JSON（第 %d/%d 次生成），完整内容(%d字)：\n%s",
+                      gen, GEN_RETRIES, len(content), content[:1500])
+            if gen < GEN_RETRIES:
+                time.sleep(BACKOFF_BASE)
+                continue
+            raise SystemExit("invalid AI json")
+        try:
+            _validate(report)
+        except AssertionError as e:
+            LOG.error("结构校验失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
+            if gen < GEN_RETRIES:
+                time.sleep(BACKOFF_BASE)
+                continue
+            raise SystemExit("invalid report structure")
+        total = sum(len(report.get("modules", {}).get(k, [])) for k in
+                    ("project_opportunities", "growth_operations", "views_insights"))
+        if total == 0 and len(signals) > 0:
+            LOG.warning("AI 返回 0 条但候选信号有 %d 条（疑似空生成），重生成（%d/%d）",
+                        len(signals), gen, GEN_RETRIES)
+            if gen < GEN_RETRIES:
+                time.sleep(BACKOFF_BASE)
+                continue
+            LOG.warning("已达最大生成次数仍为 0 条，接受空日报。")
+        break
 
-    # 4) 解析 + 校验
-    report = _extract_json(content)
-    if report is None:
-        LOG.error("AI 返回无法解析为 JSON，完整内容(%d字)：\n%s", len(content), content)
-        raise SystemExit("invalid AI json")
-    _validate(report)
     report["date"] = today
     report["timezone"] = "Asia/Shanghai"
 

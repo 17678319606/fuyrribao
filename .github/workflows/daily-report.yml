@@ -1,6 +1,8 @@
 # 副业日报每日生成流水线
 # 触发：北京时间 18:00（UTC 10:00）+ 手动触发
-# 三步：采集增量 → AI 结构化 → 发布 WordPress
+# 流程：采集增量 → AI 结构化 → 发布 WordPress
+# 抗抖动设计：步骤 1-3 合并进单步「自愈重试循环」（网络抖动/源站超时自动重试最多 3 次）；
+#           git push 前先 rebase 远端，避免 non-fast-forward 导致状态回写失败。
 # 密钥全部走 GitHub Secrets，绝不硬编码。
 
 name: 副业日报每日生成
@@ -16,7 +18,7 @@ permissions:
 jobs:
   daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: 拉取仓库
         uses: actions/checkout@v4
@@ -31,37 +33,54 @@ jobs:
       - name: 安装依赖
         run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
 
-      # ---------- 步骤 1：采集当日增量信号 ----------
-      - name: 1) 采集增量信号
+      # ---------- 采集 + AI 生成 + 发布：合并为「自愈重试循环」 ----------
+      # 任一环节因网络抖动/源站超时/断流失败时，自动休眠 60s 后重试，最多 3 轮；
+      # 仅当 3 轮全部失败才标记作业失败。脚本内另有端点级/生成级多层重试做兜底。
+      - name: 采集 + AI 生成 + 发布（自愈重试，抗抖动/断流）
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 自带，用于读 1c7 仓库 commit diff
-        run: python scripts/fetch_signals.py
-
-      # ---------- 步骤 2：AI 结构化生成日报 JSON ----------
-      - name: 2) AI 结构化生成日报
-        env:
           AI_BASE_URL: https://ai.jinbufenzi.com/v1
           AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
           AI_MODEL: auto
-          AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}   # 可选：国内出口代理池，缓解海外 Runner 解析不到国内 AI 网关
-        run: python scripts/generate_report.py
-
-      # ---------- 步骤 3：发布到 WordPress（直接发布，非草稿） ----------
-      - name: 3) 发布到 WordPress
-        env:
+          AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}   # 可选：国内出口代理池
           WP_URL: https://dajiayouxuan.com
           WP_USER: tougao
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           WP_CATEGORY_NAME: 日报
-          # 手动触发时强制更新今日已有文章（验证新排版）；cron 时防重复跳过
+          # 手动触发时强制更新今日已有文章（验证新排版）；cron 时防重复跳过（残缺则自愈覆盖）
           FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
-        run: python scripts/publish_wp.py
+        run: |
+          MAX_TRIES=3
+          for i in $(seq 1 $MAX_TRIES); do
+            echo "===== 第 $i/$MAX_TRIES 轮尝试（采集→AI→发布） ====="
+            if python scripts/fetch_signals.py \
+               && python scripts/generate_report.py \
+               && python scripts/publish_wp.py; then
+              echo "✅ 第 $i 轮成功完成日报生成与发布"
+              break
+            fi
+            if [ "$i" -lt "$MAX_TRIES" ]; then
+              echo "⚠️ 第 $i 轮失败（疑似网络抖动/源站超时），60s 后自愈重试…"
+              sleep 60
+            else
+              echo "❌ 已重试 $MAX_TRIES 次仍失败，标记作业失败"
+              exit 1
+            fi
+          done
 
-      # ---------- 步骤 4：把去重状态 + 产物提交回仓库 ----------
-      - name: 4) 提交状态与产物
+      # ---------- 把去重状态 + 产物提交回仓库（rebase 安全推送） ----------
+      - name: 提交状态与产物
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/ data/ || true
-          git diff --cached --quiet || git commit -m "daily: $(date +%F)"
-          git push
+          git diff --cached --quiet || git commit -m "daily: $(date +%F) [retry-safe]"
+          # 推送前先 rebase 远端：规避 Actions 并行/历史漂移导致的 non-fast-forward
+          for j in 1 2 3; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push; then
+              echo "✅ 状态已回写仓库"
+              break
+            fi
+            echo "git push 第 $j/3 次失败（可能远端已更新），5s 后重试…"
+            sleep 5
+          done
