@@ -1,0 +1,64 @@
+# 副业日报每日生成流水线
+# 触发：北京时间 18:00（UTC 10:00）+ 手动触发
+# 三步：采集增量 → AI 结构化 → 发布 WordPress
+# 密钥全部走 GitHub Secrets，绝不硬编码。
+
+name: 副业日报每日生成
+
+on:
+  schedule:
+    - cron: '0 10 * * *'        # UTC 10:00 = 北京时间 18:00
+  workflow_dispatch: {}         # 允许在 Actions 页面手动跑一次
+
+permissions:
+  contents: write               # 仅用于提交去重状态 / 产物回仓库
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install --quiet requests beautifulsoup4 feedparser lxml
+
+      # ---------- 步骤 1：采集当日增量信号 ----------
+      - name: 1) 采集增量信号
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 自带，用于读 1c7 仓库 commit diff
+        run: python scripts/fetch_signals.py
+
+      # ---------- 步骤 2：AI 结构化生成日报 JSON ----------
+      - name: 2) AI 结构化生成日报
+        env:
+          AI_BASE_URL: https://ai.jinbufenzi.com/v1
+          AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+          AI_MODEL: auto
+        run: python scripts/generate_report.py
+
+      # ---------- 步骤 3：发布到 WordPress（直接发布，非草稿） ----------
+      - name: 3) 发布到 WordPress
+        env:
+          WP_URL: https://dajiayouxuan.com
+          WP_USER: tougao
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          WP_CATEGORY_NAME: 日报
+        run: python scripts/publish_wp.py
+
+      # ---------- 步骤 4：把去重状态 + 产物提交回仓库 ----------
+      - name: 4) 提交状态与产物
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/ data/ || true
+          git diff --cached --quiet || git commit -m "daily: $(date +%F)"
+          git push
