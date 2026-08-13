@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """步骤3：把日报 JSON 渲染成文章 HTML，经 WordPress REST API 直接发布（非草稿）。
 密钥走环境变量（由 GitHub Secrets 注入），绝不硬编码。
+排版：每个条目为卡片；字段用 H3（带「：」号）+ 独立段落呈现；来源/证据均为文字链。
 """
 import os
 import sys
 import json
 import html
 import base64
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
@@ -25,27 +27,33 @@ header.top{border-bottom:3px solid var(--brand);padding-bottom:18px;}
 h1{font-size:30px;margin:6px 0 4px;font-weight:800;}
 .date{color:var(--sub);font-size:14px;}
 .lede{background:var(--brand-soft);border-radius:12px;padding:14px 16px;color:#7a2c20;font-size:15px;margin:18px 0 28px;}
-.module{margin:34px 0;}
-.m-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+.module{margin:36px 0;}
+.m-head{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
 .m-tag{width:8px;height:24px;border-radius:4px;}
 .m-title{font-size:21px;font-weight:800;margin:0;}
 .m-count{color:var(--sub);font-size:13px;margin-left:auto;}
 .m1 .m-tag{background:var(--brand);}.m1 .m-title{color:var(--brand);}
 .m2 .m-tag{background:var(--blue);}.m2 .m-title{color:var(--blue);}
 .m3 .m-tag{background:var(--purple);}.m3 .m-title{color:var(--purple);}
-.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px;}
-.item h3{margin:0 0 4px;font-size:17px;}
-.src{font-size:13px;color:var(--sub);margin-bottom:12px;}
-.src a{color:var(--blue);text-decoration:none;font-weight:600;}
-.row{display:grid;grid-template-columns:96px 1fr;gap:8px;padding:7px 0;border-top:1px dashed var(--line);}
-.row:first-of-type{border-top:none;}
-.lab{color:var(--sub);font-size:13px;font-weight:600;}
-.val{font-size:14.5px;}
-.quote{border-left:3px solid var(--purple);background:#f6f3ff;padding:10px 14px;border-radius:0 8px 8px 0;color:#3d2d6b;}
+.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px;box-shadow:0 2px 10px rgba(17,24,39,.06);}
+.it-title{font-size:20px;font-weight:800;color:var(--ink);margin:0 0 6px;line-height:1.4;}
+.it-meta{font-size:13px;color:var(--sub);margin:0 0 4px;padding-bottom:12px;border-bottom:1px solid var(--line);}
+.it-meta a{color:var(--blue);text-decoration:none;font-weight:600;}
+.it-meta a:hover{text-decoration:underline;}
+.field{font-size:15px;font-weight:700;margin:16px 0 6px;padding-left:10px;border-left:3px solid var(--brand);line-height:1.3;}
+.field.m1{border-color:var(--brand);color:var(--brand);}
+.field.m2{border-color:var(--blue);color:var(--blue);}
+.field.m3{border-color:var(--purple);color:var(--purple);}
+.field.per{border-color:var(--purple);color:#5b3fa0;}
+.ftext{font-size:14.5px;color:var(--ink);margin:0 0 4px;line-height:1.85;}
+.perspective{background:#f6f3ff;border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:12px 14px;margin:0 0 4px;}
+.perspective p{margin:0;font-size:14.5px;color:#3d2d6b;line-height:1.85;}
 .summary{background:#fff;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:12px;padding:20px;}
 .summary h2{margin:0 0 10px;font-size:20px;color:var(--amber);}
-.evidence{margin-top:12px;font-size:13px;color:var(--sub);}
-.evidence a{color:var(--blue);text-decoration:none;}
+.meth{font-size:15px;line-height:1.85;}
+.evidence{margin-top:12px;font-size:13px;color:var(--sub);line-height:1.9;}
+.evidence a{color:var(--blue);text-decoration:none;font-weight:600;margin:0 2px;}
+.evidence a:hover{text-decoration:underline;}
 footer{margin-top:50px;text-align:center;color:var(--sub);font-size:12px;}
 """
 
@@ -64,7 +72,14 @@ ITEM_FIELDS = [
 ]
 
 
-def render_item(it):
+def _domain(u):
+    try:
+        return urlparse(u).netloc.replace("www.", "")
+    except Exception:
+        return u
+
+
+def render_item(it, modcls):
     title = html.escape(it.get("title", ""))
     src_name = html.escape(it.get("source_name", ""))
     src_url = html.escape(it.get("source_url", ""))
@@ -73,11 +88,15 @@ def render_item(it):
         val = it.get(key)
         if not val:
             continue
-        cls = ' class="quote"' if (key == "perspective" and "原文" in str(it.get("signal", ""))) else ""
-        rows += f'<div class="row"><span class="lab">{label}</span><span class="val"{cls}>{html.escape(str(val))}</span></div>'
+        if key == "perspective":
+            rows += (f'<h3 class="field per">副业视角解读：</h3>\n'
+                     f'<div class="perspective"><p>{html.escape(str(val))}</p></div>')
+        else:
+            rows += (f'<h3 class="field {modcls}">{label}：</h3>\n'
+                     f'<p class="ftext">{html.escape(str(val))}</p>')
     return f'''<article class="item">
-<h3>{title}</h3>
-<div class="src">来源：{src_name} · <a href="{src_url}" target="_blank" rel="noopener">阅读原文 →</a></div>
+<h3 class="it-title">{title}</h3>
+<div class="it-meta">来源：{src_name} · <a href="{src_url}" target="_blank" rel="noopener">阅读原文 →</a></div>
 {rows}
 </article>'''
 
@@ -95,20 +114,34 @@ def render(report):
         items = report["modules"].get(key, [])
         if not items:
             continue
-        cards = "".join(render_item(it) for it in items)
+        cards = "".join(render_item(it, cls) for it in items)
         body += f'''<section class="module {cls}">
 <div class="m-head"><span class="m-tag"></span><h2 class="m-title">{title}</h2>
 <span class="m-count">精选 {len(items)}</span></div>{cards}</section>'''
     ds = report.get("daily_summary", {})
     meth = html.escape(ds.get("methodology", ""))
-    ev = "".join(f'<a href="{html.escape(u)}" target="_blank" rel="noopener">{html.escape(u)}</a> · '
-                 for u in ds.get("evidence", []))
+    # 证据文字链：优先用条目里的来源名/标题，否则退化为域名
+    url_map = {}
+    for key, _, _ in MODULES:
+        for it in report["modules"].get(key, []):
+            u = it.get("source_url")
+            if u:
+                url_map[u] = (it.get("source_name", ""), it.get("title", ""))
+    ev_parts = []
+    for u in ds.get("evidence", []):
+        sn, ti = url_map.get(u, ("", ""))
+        label = ti or sn or _domain(u)
+        ev_parts.append(
+            f'<a href="{html.escape(u)}" target="_blank" rel="noopener">{html.escape(label)}</a>')
+    ev = " · ".join(ev_parts)
     if meth:
         body += f'''<section class="module"><div class="summary">
 <h2>📌 每日总结 · 今日可复用方法论</h2>
 <div class="meth">{meth}</div>
 <div class="evidence">证据：{ev}</div></div></section>'''
-    return f'<div class="wrap">{body}<footer>本文由 GitHub Actions 自动生成并发布。</footer></div>'
+    return (f'<style>{CSS}</style>\n'
+            f'<div class="wrap">{body}'
+            f'<footer>本文由 GitHub Actions 自动生成并发布。</footer></div>')
 
 
 def get_category_id(session, base, auth, name):
