@@ -175,7 +175,11 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                         obj = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    delta = obj.get("choices", [{}])[0].get("delta", {}).get("content")
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        # 流式结束标记 / usage 统计 chunk / 网关偶发空 chunk：跳过，不崩溃
+                        continue
+                    delta = (choices[0].get("delta") or {}).get("content")
                     if delta:
                         content += delta
                 if not content:
