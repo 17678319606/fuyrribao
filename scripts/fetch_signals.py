@@ -207,9 +207,8 @@ def main():
         # 去重（按 id）
         fresh = [it for it in items if it.get("id") and it["id"] not in seen]
         LOG.info("源 %s: 抓到 %d，新增 %d", cfg.get("id"), len(items), len(fresh))
-        # 冷启动限流，避免首期爆量
-        if cold and stype != "github_readme_diff":
-            fresh = fresh[: C.COLD_START_MAX_PER_SOURCE]
+        # 每个源限流，保证多样性并控制 AI 上下文长度
+        fresh = fresh[: C.MAX_PER_SOURCE]
         candidates.extend(fresh)
 
     if cold:
