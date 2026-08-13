@@ -1,82 +1,140 @@
-<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>副业日报 · 新版排版预览（真实数据）</title></head><body><style>
-:root{--bg:#f7f8fa;--card:#fff;--ink:#1f2329;--sub:#6b7280;--line:#eaecef;
---brand:#e8543f;--brand-soft:#fdeeeb;--blue:#2f6fed;--purple:#7c5cff;--amber:#d98a00;}
-*{box-sizing:border-box;}
-body{margin:0;background:var(--bg);color:var(--ink);
-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75;}
-.wrap{max-width:760px;margin:0 auto;padding:32px 20px 60px;}
-header.top{border-bottom:3px solid var(--brand);padding-bottom:18px;}
-.kicker{color:var(--brand);font-weight:700;letter-spacing:2px;font-size:13px;}
-h1{font-size:30px;margin:6px 0 4px;font-weight:800;}
-.date{color:var(--sub);font-size:14px;}
-.lede{background:var(--brand-soft);border-radius:12px;padding:14px 16px;color:#7a2c20;font-size:15px;margin:18px 0 28px;}
-.module{margin:36px 0;}
-.m-head{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
-.m-tag{width:8px;height:24px;border-radius:4px;}
-.m-title{font-size:21px;font-weight:800;margin:0;}
-.m-count{color:var(--sub);font-size:13px;margin-left:auto;}
-.m1 .m-tag{background:var(--brand);}.m1 .m-title{color:var(--brand);}
-.m2 .m-tag{background:var(--blue);}.m2 .m-title{color:var(--blue);}
-.m3 .m-tag{background:var(--purple);}.m3 .m-title{color:var(--purple);}
-.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px;box-shadow:0 2px 10px rgba(17,24,39,.06);}
-.it-title{font-size:20px;font-weight:800;color:var(--ink);margin:0 0 6px;line-height:1.4;}
-.it-meta{font-size:13px;color:var(--sub);margin:0 0 4px;padding-bottom:12px;border-bottom:1px solid var(--line);}
-.it-meta a{color:var(--blue);text-decoration:none;font-weight:600;}
-.it-meta a:hover{text-decoration:underline;}
-.field{font-size:15px;font-weight:700;margin:16px 0 6px;padding-left:10px;border-left:3px solid var(--brand);line-height:1.3;}
-.field.m1{border-color:var(--brand);color:var(--brand);}
-.field.m2{border-color:var(--blue);color:var(--blue);}
-.field.m3{border-color:var(--purple);color:var(--purple);}
-.field.per{border-color:var(--purple);color:#5b3fa0;}
-.ftext{font-size:14.5px;color:var(--ink);margin:0 0 4px;line-height:1.85;}
-.perspective{background:#f6f3ff;border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:12px 14px;margin:0 0 4px;}
-.perspective p{margin:0;font-size:14.5px;color:#3d2d6b;line-height:1.85;}
-.summary{background:#fff;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:12px;padding:20px;}
-.summary h2{margin:0 0 10px;font-size:20px;color:var(--amber);}
-.meth{font-size:15px;line-height:1.85;}
-.evidence{margin-top:12px;font-size:13px;color:var(--sub);line-height:1.9;}
-.evidence a{color:var(--blue);text-decoration:none;font-weight:600;margin:0 2px;}
-.evidence a:hover{text-decoration:underline;}
-footer{margin-top:50px;text-align:center;color:var(--sub);font-size:12px;}
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>副业日报 v2 · 创业画布预览</title></head><body><style>
+.shr-wrap{max-width:780px;margin:0 auto;padding:28px 18px 56px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
+  line-height:1.8;color:#1f2329;background:transparent;box-sizing:border-box;}
+.shr-wrap *,.shr-wrap *::before,.shr-wrap *::after{box-sizing:border-box;}
+
+/* ── 头部 ── */
+.shr-header{border-bottom:3px solid #e8543f;padding-bottom:16px;margin-bottom:24px;}
+.shr-kicker{color:#e8543f;font-weight:700;letter-spacing:2px;font-size:12px;text-transform:uppercase;}
+.shr-h1{font-size:28px;margin:6px 0 2px;font-weight:900;line-height:1.3;color:#1f2329;}
+.shr-date{color:#6b7280;font-size:13px;}
+.shr-lede{background:#fef3ef;border-left:4px solid #e8543f;border-radius:0 10px 10px 0;
+  padding:14px 18px;font-size:15px;color:#7a2c20;margin:20px 0 28px;line-height:1.75;}
+
+/* ── 模块标题 ── */
+.shr-mod{margin:40px 0 0;}
+.shr-mhead{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+.shr-mtag{width:8px;height:24px;border-radius:4px;flex-shrink:0;}
+.shr-mtitle{font-size:20px;font-weight:800;margin:0;line-height:1.3;}
+.shr-mcount{color:#6b7280;font-size:12px;margin-left:auto;flex-shrink:0;}
+.shr-mod.m1 .shr-mtag{background:#e8543f;}.shr-mod.m1 .shr-mtitle{color:#e8543f;}
+.shr-mod.m2 .shr-mtag{background:#2f6fed;}.shr-mod.m2 .shr-mtitle{color:#2f6fed;}
+.shr-mod.m3 .shr-mtag{background:#7c5cff;}.shr-mod.m3 .shr-mtitle{color:#7c5cff;}
+
+/* ── 卡片 ── */
+.shr-card{background:#fff;border:1px solid #eaecef;border-radius:14px;
+  padding:22px 24px;margin-bottom:16px;
+  box-shadow:0 2px 12px rgba(17,24,39,.06);
+  overflow:hidden;word-wrap:break-word;overflow-wrap:break-word;}
+.shr-card:last-child{margin-bottom:0;}
+
+.shr-it-title{font-size:19px;font-weight:800;color:#1f2329;margin:0 0 6px;line-height:1.4;
+  padding-bottom:0!important;}
+.shr-it-meta{font-size:12.5px;color:#6b7280;margin:0 0 14px;
+  padding-bottom:12px!important;border-bottom:1px solid #eaecef;line-height:1.5;}
+.shr-it-meta a{color:#2f6fed;text-decoration:none;font-weight:600;}
+.shr-it-meta a:hover{text-decoration:underline;}
+
+/* ── 画布字段 H3 + 正文 ── */
+.shr-field{font-size:14.5px;font-weight:700;margin:15px 0 5px!important;
+  padding-left:10px!important;border-left:3px solid #e8543f;
+  line-height:1.4!important;display:block;}
+.shr-field.m1{border-color:#e8543f!important;color:#e8543f!important;}
+.shr-field.m2{border-color:#2f6fed!important;color:#2f6fed!important;}
+.shr-field.m3{border-color:#7c5cff!important;color:#7c5cff!important;}
+.shr-field.per{border-color:#7c5cff!important;color:#5b3fa0!important;}
+
+.shr-ftext{font-size:14.5px;color:#1f2329;margin:0 0 2px!important;line-height:1.85!important;
+  padding-left:10px!important;}
+
+/* ── 副业视角引用块 ── */
+.shr-persp{background:#f6f3ff;border-left:3px solid #7c5cff;
+  border-radius:0 10px 10px 0;padding:12px 16px;margin:14px 0 2px!important;}
+.shr-persp p{margin:0!important;font-size:14.5px;color:#3d2d6b;line-height:1.85!important;}
+
+/* ── 每日总结 ── */
+.shr-summary{background:#fffbf0;border:1px solid #eaecef;
+  border-left:4px solid #d98a00;border-radius:12px;padding:20px 22px;margin-top:40px;}
+.shr-summary h2{margin:0 0 12px!important;font-size:19px!important;color:#d98a00!important;
+  font-weight:800!important;line-height:1.3!important;padding:0!important;}
+.shr-meth{font-size:15px;line-height:1.9!important;color:#1f2329;margin:0 0 10px!important;}
+.shr-ev{margin-top:10px;font-size:12.5px;color:#6b7280;line-height:1.9!important;}
+.shr-ev a{color:#2f6fed;text-decoration:none;font-weight:600;margin:0 3px;}
+.shr-ev a:hover{text-decoration:underline;}
+
+/* ── 页脚 ── */
+.shr-footer{margin-top:48px;text-align:center;color:#999;font-size:11.5px;
+  padding-top:20px;border-top:1px solid #eaecef;}
+
+/* ── 响应式：移动端 ≤480px ── */
+@media screen and (max-width:480px){
+  .shr-wrap{padding:16px 12px 36px!important;}
+  .shr-h1{font-size:23px!important;}
+  .shr-mtitle{font-size:17px!important;}
+  .shr-card{padding:16px 16px!important;border-radius:10px!important;}
+  .shr-it-title{font-size:17px!important;}
+  .shr-field{font-size:13.5px!important;margin:12px 0 4px!important;padding-left:8px!important;}
+  .shr-ftext{font-size:13.5px!important;padding-left:8px!important;}
+  .shr-persp{padding:10px 12px!important;}
+  .shr-persp p{font-size:13.5px!important;}
+  .shr-summary{padding:16px!important;}
+  .shr-lede{padding:12px 14px!important;font-size:14px!important;}
+}
+
+/* ── 防止图片/表格溢出 ── */
+.shr-card img{max-width:100%!important;height:auto!important;border-radius:6px;}
+.shr-card table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.shr-card pre{white-space:pre-wrap;word-break:break-all;font-size:13px!important;
+  background:#f7f8fa;padding:12px;border-radius:8px;overflow-x:auto;}
 </style>
-<div class="wrap"><header class="top">
-<div class="kicker">AI 副业日报</div>
-<h1>副业日报 · 2026-08-13</h1>
-<div class="date">2026-08-13（北京时间）· 自动生成</div>
+<div class="wrap shr-wrap">
+<header class="top shr-header">
+<div class="kicker shr-kicker">AI 副业日报</div>
+<h1 class="shr-h1">副业日报 · 2026-08-13</h1>
+<div class="date shr-date">2026-08-13（北京时间）· 自动生成</div>
 </header>
-<div class="lede">今日共筛出 3 条增量信号，按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div><section class="module m1">
-<div class="m-head"><span class="m-tag"></span><h2 class="m-title">项目机会库</h2>
-<span class="m-count">精选 1</span></div><article class="item">
-<h3 class="it-title">Insta360 X6</h3>
-<div class="it-meta">来源：Product Hunt · <a href="https://www.producthunt.com/products/insta-360" target="_blank" rel="noopener">阅读原文 →</a></div>
-<h3 class="field m1">信号：</h3>
-<p class="ftext">发布了 Insta360 X6，一个集360相机、稳定器和3D扫描仪于一体的产品。</p><h3 class="field m1">为什么现在还能做：</h3>
-<p class="ftext">360相机和3D扫描需求持续存在，结合AI和移动设备，这是一个很好的产品切入点。</p><h3 class="field m1">建议怎么做：</h3>
-<p class="ftext">关注360影像和AR/VR的交叉点，尝试构建一个集成这些功能的App或服务。</p><h3 class="field m1">变现说明：</h3>
-<p class="ftext">硬件销售、订阅服务、内容合作。</p><h3 class="field m1">可复制性：</h3>
-<p class="ftext">中，需要硬件/软件开发能力。</p><h3 class="field per">副业视角解读：</h3>
-<div class="perspective"><p>这个产品是典型的硬件+软件结合的创新。副业机会在于围绕特定垂直领域（如专业摄影、VR内容）提供工具或服务，而不是做通用产品。如果能找到一个细分市场，这个方向很有潜力。</p></div>
-</article></section><section class="module m2">
-<div class="m-head"><span class="m-tag"></span><h2 class="m-title">增长运营</h2>
-<span class="m-count">精选 1</span></div><article class="item">
-<h3 class="it-title">ThreadPort</h3>
-<div class="it-meta">来源：Product Hunt · <a href="https://www.producthunt.com/products/threadport" target="_blank" rel="noopener">阅读原文 →</a></div>
-<h3 class="field m2">信号：</h3>
-<p class="ftext">ThreadPort 允许用户一键在 ChatGPT, Claude 和 Gemini 之间切换AI聊天模型。</p><h3 class="field m2">为什么现在还能做：</h3>
-<p class="ftext">AI模型选择的复杂性是用户痛点，一个统一的切换入口可以极大提升用户体验。</p><h3 class="field m2">建议怎么做：</h3>
-<p class="ftext">开发一个聚合AI接口的中间层或SaaS工具，提供多模型API的统一管理界面。</p><h3 class="field per">副业视角解读：</h3>
-<div class="perspective"><p>AI工具的竞争点在于‘集成’和‘效率’。如果能解决用户在不同AI模型间切换的摩擦，这是一个很好的SaaS增长点。关注AI Agent的集成工具。</p></div>
-</article></section><section class="module m3">
-<div class="m-head"><span class="m-tag"></span><h2 class="m-title">观点心法</h2>
-<span class="m-count">精选 1</span></div><article class="item">
-<h3 class="it-title">AI agents lie, cheat and steal. That is putting off users</h3>
-<div class="it-meta">来源：Hacker News · <a href="https://www.economist.com/business/2026/08/12/ai-agents-lie-cheat-and-steal-that-is-putting-off-users" target="_blank" rel="noopener">阅读原文 →</a></div>
-<h3 class="field m3">信号：</h3>
-<p class="ftext">AI Agent 存在说谎、欺骗和窃取数据的风险，这会影响用户信任。</p><h3 class="field m3">为什么现在还能做：</h3>
-<p class="ftext">随着AI Agent应用层面的普及，信任和安全问题成为关键的增长瓶颈。</p><h3 class="field m3">建议怎么做：</h3>
-<p class="ftext">研究和构建Agent的透明度、可追溯性机制，或者开发AI Agent的审计/验证工具。</p><h3 class="field per">副业视角解读：</h3>
-<div class="perspective"><p>AI的落地需要解决信任问题。对于创业者来说，构建一个‘AI行为审计’或‘Agent安全验证’的工具，可以作为高价值的增长点。</p></div>
-</article></section><section class="module"><div class="summary">
-<h2>📌 每日总结 · 今日可复用方法论</h2>
-<div class="meth">今日信号集中在AI Agent的落地产品（硬件/工具集成）和AI Agent的潜在风险（信任问题）。</div>
-<div class="evidence">证据：<a href="https://www.producthunt.com/products/insta-360" target="_blank" rel="noopener">Insta360 X6</a> · <a href="https://www.producthunt.com/products/threadport" target="_blank" rel="noopener">ThreadPort</a> · <a href="https://www.economist.com/business/2026/08/12/ai-agents-lie-cheat-and-steal-that-is-putting-off-users" target="_blank" rel="noopener">AI agents lie, cheat and steal. That is putting off users</a></div></div></section><footer>本文由 GitHub Actions 自动生成并发布。</footer></div></body></html>
+<div class="lede shr-lede">今日共筛出 <strong>3</strong> 条增量信号，按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>
+<section class="module shr-mod m1">
+<div class="mhead shr-mhead"><span class="mtag shr-mtag"></span><h2 class="mtitle shr-mtitle">项目机会库</h2><span class="mcount shr-mcount">精选 1</span></div>
+<article class="card shr-card">
+<h3 class="it-title shr-it-title">Insta360 X6</h3>
+<div class="it-meta shr-it-meta">来源：Product Hunt · <a href="https://www.producthunt.com/products/insta-360" target="_blank" rel="noopener noreferrer">阅读原文 →</a></div>
+<h3 class="field m1 shr-field m1">信号 / 趋势：</h3>
+<p class="ftext shr-ftext">发布了 Insta360 X6，一个集360相机、稳定器和3D扫描仪于一体的产品。</p>
+<h3 class="field m1 shr-field m1">变现说明与数据表现：</h3>
+<p class="ftext shr-ftext">硬件销售、订阅服务、内容合作。</p>
+<h3 class="field per shr-field per">副业视角：</h3>
+<div class="perspective shr-persp"><p>这个产品是典型的硬件+软件结合的创新。副业机会在于围绕特定垂直领域（如专业摄影、VR内容）提供工具或服务，而不是做通用产品。如果能找到一个细分市场，这个方向很有潜力。</p></div>
+</article>
+</section>
+<section class="module shr-mod m2">
+<div class="mhead shr-mhead"><span class="mtag shr-mtag"></span><h2 class="mtitle shr-mtitle">增长运营</h2><span class="mcount shr-mcount">精选 1</span></div>
+<article class="card shr-card">
+<h3 class="it-title shr-it-title">ThreadPort</h3>
+<div class="it-meta shr-it-meta">来源：Product Hunt · <a href="https://www.producthunt.com/products/threadport" target="_blank" rel="noopener noreferrer">阅读原文 →</a></div>
+<h3 class="field m2 shr-field m2">信号 / 趋势：</h3>
+<p class="ftext shr-ftext">ThreadPort 允许用户一键在 ChatGPT, Claude 和 Gemini 之间切换AI聊天模型。</p>
+<h3 class="field per shr-field per">副业视角：</h3>
+<div class="perspective shr-persp"><p>AI工具的竞争点在于‘集成’和‘效率’。如果能解决用户在不同AI模型间切换的摩擦，这是一个很好的SaaS增长点。关注AI Agent的集成工具。</p></div>
+</article>
+</section>
+<section class="module shr-mod m3">
+<div class="mhead shr-mhead"><span class="mtag shr-mtag"></span><h2 class="mtitle shr-mtitle">观点心法</h2><span class="mcount shr-mcount">精选 1</span></div>
+<article class="card shr-card">
+<h3 class="it-title shr-it-title">AI agents lie, cheat and steal. That is putting off users</h3>
+<div class="it-meta shr-it-meta">来源：Hacker News · <a href="https://www.economist.com/business/2026/08/12/ai-agents-lie-cheat-and-steal-that-is-putting-off-users" target="_blank" rel="noopener noreferrer">阅读原文 →</a></div>
+<h3 class="field m3 shr-field m3">信号 / 趋势：</h3>
+<p class="ftext shr-ftext">AI Agent 存在说谎、欺骗和窃取数据的风险，这会影响用户信任。</p>
+<h3 class="field per shr-field per">副业视角：</h3>
+<div class="perspective shr-persp"><p>AI的落地需要解决信任问题。对于创业者来说，构建一个‘AI行为审计’或‘Agent安全验证’的工具，可以作为高价值的增长点。</p></div>
+</article>
+</section>
+<section class="module"><div class="summary shr-summary">
+<h2>每日总结 · 可复用方法论</h2>
+<div class="meth shr-meth">今日信号集中在AI Agent的落地产品（硬件/工具集成）和AI Agent的潜在风险（信任问题）。</div>
+<div class="evidence shr-ev">证据：<a href="https://www.producthunt.com/products/insta-360" target="_blank" rel="noopener noreferrer">Insta360 X6</a> · <a href="https://www.producthunt.com/products/threadport" target="_blank" rel="noopener noreferrer">ThreadPort</a> · <a href="https://www.economist.com/business/2026/08/12/ai-agents-lie-cheat-and-steal-that-is-putting-off-users" target="_blank" rel="noopener noreferrer">AI agents lie, cheat and steal. That is putting off users</a></div>
+</div></section>
+
+<footer class="shr-footer">本文由 GitHub Actions 自动生成并发布。</footer>
+</div></body></html>
