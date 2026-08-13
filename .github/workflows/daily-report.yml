@@ -29,7 +29,7 @@ jobs:
           python-version: '3.11'
 
       - name: 安装依赖
-        run: pip install --quiet requests beautifulsoup4 feedparser lxml
+        run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
 
       # ---------- 步骤 1：采集当日增量信号 ----------
       - name: 1) 采集增量信号
@@ -43,6 +43,7 @@ jobs:
           AI_BASE_URL: https://ai.jinbufenzi.com/v1
           AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
           AI_MODEL: auto
+          AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}   # 可选：国内出口代理池，缓解海外 Runner 解析不到国内 AI 网关
         run: python scripts/generate_report.py
 
       # ---------- 步骤 3：发布到 WordPress（直接发布，非草稿） ----------
