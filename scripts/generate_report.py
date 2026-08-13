@@ -50,8 +50,8 @@ def generate(candidates, skill_text):
     )
     payload = {
         "model": model,
-        "temperature": 0.4,
-        "max_tokens": 8000,
+        "temperature": 0.5,
+        "max_tokens": 16000,
         "messages": [
             {"role": "system", "content": skill_text},
             {"role": "user", "content": user_prompt},
