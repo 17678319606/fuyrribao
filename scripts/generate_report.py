@@ -30,7 +30,9 @@ DATA_DIR = C.DATA_DIR
 
 RETRY_PER_ENDPOINT = 4      # 每个候选端点（直连 / 代理）的最大尝试次数
 BACKOFF_BASE = 3            # 退避基数（秒），呈指数增长：3 / 6 / 12 / 24s
-REQ_TIMEOUT = (15, 150)     # (connect, read) 超时，read 放宽以容纳 16k tokens 输出
+REQ_TIMEOUT = (15, 300)     # (connect, read)；read 放宽到 300s 以容纳流式长生成
+MAX_INPUT_SIGNALS = 40      # 送入 AI 的候选上限（控制输入上下文，给源站减负）
+MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生成耗时，避免 Cloudflare 524）
 
 
 def _parse_proxies():
@@ -69,7 +71,8 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
     payload = {
         "model": model,
         "temperature": 0.5,
-        "max_tokens": 16000,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "stream": True,   # 流式：token 持续输出可避免 Cloudflare 524（源站静默超时）
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -83,16 +86,34 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
         label = proxy or "直连"
         for attempt in range(1, RETRY_PER_ENDPOINT + 1):
             try:
-                LOG.info("AI 请求 [端点 %d/%d=%s] 第 %d/%d 次尝试",
+                LOG.info("AI 请求 [端点 %d/%d=%s] 第 %d/%d 次尝试 (stream)",
                          ci + 1, len(cands), label, attempt, RETRY_PER_ENDPOINT)
                 resp = requests.post(
                     url, headers=headers, json=payload,
-                    proxies=proxies, timeout=REQ_TIMEOUT,
+                    proxies=proxies, timeout=REQ_TIMEOUT, stream=True,
                 )
                 resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                LOG.info("AI 请求成功（端点=%s）", label)
+                # 流式聚合 SSE
+                content = ""
+                for raw_line in resp.iter_lines(decode_unicode=True):
+                    if not raw_line:
+                        continue
+                    line = raw_line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = obj.get("choices", [{}])[0].get("delta", {}).get("content")
+                    if delta:
+                        content += delta
+                if not content:
+                    raise RuntimeError("流式响应为空")
+                LOG.info("AI 请求成功（端点=%s，约 %d 字）", label, len(content))
                 return content
             except (requests.exceptions.ConnectionError,
                     requests.exceptions.Timeout,
@@ -183,6 +204,10 @@ def main():
         signals = candidates
     else:
         signals = candidates.get("candidates") or candidates.get("items") or []
+    if len(signals) > MAX_INPUT_SIGNALS:
+        signals = signals[:MAX_INPUT_SIGNALS]
+        LOG.info("候选 %d 条过多，截断至 %d 条送入 AI（保内容量同时给源站减负）",
+                 len(candidates) if isinstance(candidates, list) else len(signals), MAX_INPUT_SIGNALS)
     LOG.info("读取到 %d 条候选信号", len(signals))
 
     if not signals:
