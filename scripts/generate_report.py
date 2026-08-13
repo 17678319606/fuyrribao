@@ -212,6 +212,14 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                     snippet = " | ".join(raw_dump[:15])[:800]
                     LOG.error("流式响应为空，原始响应片段：%s", snippet)
                     raise RuntimeError("流式响应为空（见上方原始片段）")
+                # 校验 JSON 完整性：流式偶发被网关/CF 截断会导致内容不完整，
+                # 需当作本次尝试失败并退避重试，而非直接返回残缺内容
+                if _extract_json(content) is None:
+                    wait = BACKOFF_BASE * (2 ** (attempt - 1))
+                    LOG.warning("AI 返回无法解析为 JSON（可能流式被截断），本次尝试失败，%ds 后重试",
+                                wait)
+                    time.sleep(wait)
+                    continue
                 LOG.info("AI 请求成功（端点=%s，约 %d 字）", label, len(content))
                 return content
             except (requests.exceptions.ConnectionError,
