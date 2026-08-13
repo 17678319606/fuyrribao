@@ -272,13 +272,17 @@ def get_category_id(session, base, auth, name):
     return r.json()["id"]
 
 
-def already_published(session, base, auth, title):
+def find_existing_post(session, base, auth, title):
+    """返回与今日标题匹配的已发布文章 id（无则 None），供防重复/强制更新判断。"""
     import requests
     r = session.get(base + "/wp-json/wp/v2/posts",
                     params={"search": title, "status": "publish"},
                     headers=auth, timeout=30)
     r.raise_for_status()
-    return any(title in p.get("title", {}).get("rendered", "") for p in r.json())
+    for p in r.json():
+        if title in p.get("title", {}).get("rendered", ""):
+            return p["id"]
+    return None
 
 
 def main():
@@ -308,7 +312,26 @@ def main():
     auth = {"Authorization": "Basic " + base64.b64encode(
         f"{user}:{app_pw}".encode()).decode(), "Content-Type": "application/json"}
 
-    if already_published(session, base, auth, title):
+    existing_id = find_existing_post(session, base, auth, title)
+    force = os.environ.get("FORCE_UPDATE") == "1"
+    if existing_id:
+        if force:
+            LOG.info("检测到今日文章(%s)，FORCE_UPDATE 模式：用新内容更新。", existing_id)
+            try:
+                cat_id = get_category_id(session, base, auth, cat_name)
+            except Exception as e:
+                LOG.warning("类目解析失败，退回不指定类目: %s", e)
+                cat_id = None
+            payload = {"title": title, "content": content, "status": "publish"}
+            if cat_id:
+                payload["categories"] = [cat_id]
+            r = session.post(f"{base}/wp-json/wp/v2/posts/{existing_id}",
+                             json=payload, headers=auth, timeout=60)
+            r.raise_for_status()
+            link = r.json().get("link", "")
+            LOG.info("已更新(强制): %s", link)
+            print("PUBLISHED_URL=" + link)
+            return
         LOG.info("今日文章已存在，跳过发布（防重复）。")
         return
 

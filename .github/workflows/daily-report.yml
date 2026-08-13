@@ -53,6 +53,8 @@ jobs:
           WP_USER: tougao
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           WP_CATEGORY_NAME: 日报
+          # 手动触发时强制更新今日已有文章（验证新排版）；cron 时防重复跳过
+          FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: python scripts/publish_wp.py
 
       # ---------- 步骤 4：把去重状态 + 产物提交回仓库 ----------
