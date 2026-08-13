@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """步骤3：把日报 JSON 渲染成文章 HTML，经 WordPress REST API 直接发布（非草稿）。
 密钥走环境变量（由 GitHub Secrets 注入），绝不硬编码。
-排版：每个条目为卡片；字段用 H3（带「：」号）+ 独立段落呈现；来源/证据均为文字链。
+
+v2 排版规范（基于创业画布）：
+- 每个条目为独立卡片，带阴影和圆角
+- 字段按创业画布 9 维度呈现：信号/趋势 → 目标客户 → 价值主张 → 建议怎么做/MVP
+  → 获客渠道 → 变现说明与数据表现 → 启动成本 → 可复制性/壁垒 → 副业视角
+- 每个字段用 H3（带「：」号）+ 独立段落；**留空的字段不展示标题也不占位**
+- 来源/证据均为文字链（标题或来源名，不是裸 URL）
+- 副业视角单独用紫色引用块突出
+- 内联完整 CSS，确保 WordPress 主题不覆盖样式
+- 响应式：移动端（≤480px）自动调整字号/间距/内边距，杜绝溢出
 """
 import os
 import sys
 import json
-import html
+import html as html_lib
 import base64
 from urllib.parse import urlparse
 
@@ -15,133 +24,236 @@ import common as C
 
 LOG = C.get_logger()
 
+# ── 完整内联 CSS（高优先级选择器 + !important 防止 WP 主题覆盖）──
 CSS = """
-:root{--bg:#f7f8fa;--card:#fff;--ink:#1f2329;--sub:#6b7280;--line:#eaecef;
---brand:#e8543f;--brand-soft:#fdeeeb;--blue:#2f6fed;--purple:#7c5cff;--amber:#d98a00;}
-*{box-sizing:border-box;}
-body{margin:0;background:var(--bg);color:var(--ink);
-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75;}
-.wrap{max-width:760px;margin:0 auto;padding:32px 20px 60px;}
-header.top{border-bottom:3px solid var(--brand);padding-bottom:18px;}
-.kicker{color:var(--brand);font-weight:700;letter-spacing:2px;font-size:13px;}
-h1{font-size:30px;margin:6px 0 4px;font-weight:800;}
-.date{color:var(--sub);font-size:14px;}
-.lede{background:var(--brand-soft);border-radius:12px;padding:14px 16px;color:#7a2c20;font-size:15px;margin:18px 0 28px;}
-.module{margin:36px 0;}
-.m-head{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
-.m-tag{width:8px;height:24px;border-radius:4px;}
-.m-title{font-size:21px;font-weight:800;margin:0;}
-.m-count{color:var(--sub);font-size:13px;margin-left:auto;}
-.m1 .m-tag{background:var(--brand);}.m1 .m-title{color:var(--brand);}
-.m2 .m-tag{background:var(--blue);}.m2 .m-title{color:var(--blue);}
-.m3 .m-tag{background:var(--purple);}.m3 .m-title{color:var(--purple);}
-.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:18px;box-shadow:0 2px 10px rgba(17,24,39,.06);}
-.it-title{font-size:20px;font-weight:800;color:var(--ink);margin:0 0 6px;line-height:1.4;}
-.it-meta{font-size:13px;color:var(--sub);margin:0 0 4px;padding-bottom:12px;border-bottom:1px solid var(--line);}
-.it-meta a{color:var(--blue);text-decoration:none;font-weight:600;}
-.it-meta a:hover{text-decoration:underline;}
-.field{font-size:15px;font-weight:700;margin:16px 0 6px;padding-left:10px;border-left:3px solid var(--brand);line-height:1.3;}
-.field.m1{border-color:var(--brand);color:var(--brand);}
-.field.m2{border-color:var(--blue);color:var(--blue);}
-.field.m3{border-color:var(--purple);color:var(--purple);}
-.field.per{border-color:var(--purple);color:#5b3fa0;}
-.ftext{font-size:14.5px;color:var(--ink);margin:0 0 4px;line-height:1.85;}
-.perspective{background:#f6f3ff;border-left:3px solid var(--purple);border-radius:0 10px 10px 0;padding:12px 14px;margin:0 0 4px;}
-.perspective p{margin:0;font-size:14.5px;color:#3d2d6b;line-height:1.85;}
-.summary{background:#fff;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:12px;padding:20px;}
-.summary h2{margin:0 0 10px;font-size:20px;color:var(--amber);}
-.meth{font-size:15px;line-height:1.85;}
-.evidence{margin-top:12px;font-size:13px;color:var(--sub);line-height:1.9;}
-.evidence a{color:var(--blue);text-decoration:none;font-weight:600;margin:0 2px;}
-.evidence a:hover{text-decoration:underline;}
-footer{margin-top:50px;text-align:center;color:var(--sub);font-size:12px;}
+.shr-wrap{max-width:780px;margin:0 auto;padding:28px 18px 56px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
+  line-height:1.8;color:#1f2329;background:transparent;box-sizing:border-box;}
+.shr-wrap *,.shr-wrap *::before,.shr-wrap *::after{box-sizing:border-box;}
+
+/* ── 头部 ── */
+.shr-header{border-bottom:3px solid #e8543f;padding-bottom:16px;margin-bottom:24px;}
+.shr-kicker{color:#e8543f;font-weight:700;letter-spacing:2px;font-size:12px;text-transform:uppercase;}
+.shr-h1{font-size:28px;margin:6px 0 2px;font-weight:900;line-height:1.3;color:#1f2329;}
+.shr-date{color:#6b7280;font-size:13px;}
+.shr-lede{background:#fef3ef;border-left:4px solid #e8543f;border-radius:0 10px 10px 0;
+  padding:14px 18px;font-size:15px;color:#7a2c20;margin:20px 0 28px;line-height:1.75;}
+
+/* ── 模块标题 ── */
+.shr-mod{margin:40px 0 0;}
+.shr-mhead{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+.shr-mtag{width:8px;height:24px;border-radius:4px;flex-shrink:0;}
+.shr-mtitle{font-size:20px;font-weight:800;margin:0;line-height:1.3;}
+.shr-mcount{color:#6b7280;font-size:12px;margin-left:auto;flex-shrink:0;}
+.shr-mod.m1 .shr-mtag{background:#e8543f;}.shr-mod.m1 .shr-mtitle{color:#e8543f;}
+.shr-mod.m2 .shr-mtag{background:#2f6fed;}.shr-mod.m2 .shr-mtitle{color:#2f6fed;}
+.shr-mod.m3 .shr-mtag{background:#7c5cff;}.shr-mod.m3 .shr-mtitle{color:#7c5cff;}
+
+/* ── 卡片 ── */
+.shr-card{background:#fff;border:1px solid #eaecef;border-radius:14px;
+  padding:22px 24px;margin-bottom:16px;
+  box-shadow:0 2px 12px rgba(17,24,39,.06);
+  overflow:hidden;word-wrap:break-word;overflow-wrap:break-word;}
+.shr-card:last-child{margin-bottom:0;}
+
+.shr-it-title{font-size:19px;font-weight:800;color:#1f2329;margin:0 0 6px;line-height:1.4;
+  padding-bottom:0!important;}
+.shr-it-meta{font-size:12.5px;color:#6b7280;margin:0 0 14px;
+  padding-bottom:12px!important;border-bottom:1px solid #eaecef;line-height:1.5;}
+.shr-it-meta a{color:#2f6fed;text-decoration:none;font-weight:600;}
+.shr-it-meta a:hover{text-decoration:underline;}
+
+/* ── 画布字段 H3 + 正文 ── */
+.shr-field{font-size:14.5px;font-weight:700;margin:15px 0 5px!important;
+  padding-left:10px!important;border-left:3px solid #e8543f;
+  line-height:1.4!important;display:block;}
+.shr-field.m1{border-color:#e8543f!important;color:#e8543f!important;}
+.shr-field.m2{border-color:#2f6fed!important;color:#2f6fed!important;}
+.shr-field.m3{border-color:#7c5cff!important;color:#7c5cff!important;}
+.shr-field.per{border-color:#7c5cff!important;color:#5b3fa0!important;}
+
+.shr-ftext{font-size:14.5px;color:#1f2329;margin:0 0 2px!important;line-height:1.85!important;
+  padding-left:10px!important;}
+
+/* ── 副业视角引用块 ── */
+.shr-persp{background:#f6f3ff;border-left:3px solid #7c5cff;
+  border-radius:0 10px 10px 0;padding:12px 16px;margin:14px 0 2px!important;}
+.shr-persp p{margin:0!important;font-size:14.5px;color:#3d2d6b;line-height:1.85!important;}
+
+/* ── 每日总结 ── */
+.shr-summary{background:#fffbf0;border:1px solid #eaecef;
+  border-left:4px solid #d98a00;border-radius:12px;padding:20px 22px;margin-top:40px;}
+.shr-summary h2{margin:0 0 12px!important;font-size:19px!important;color:#d98a00!important;
+  font-weight:800!important;line-height:1.3!important;padding:0!important;}
+.shr-meth{font-size:15px;line-height:1.9!important;color:#1f2329;margin:0 0 10px!important;}
+.shr-ev{margin-top:10px;font-size:12.5px;color:#6b7280;line-height:1.9!important;}
+.shr-ev a{color:#2f6fed;text-decoration:none;font-weight:600;margin:0 3px;}
+.shr-ev a:hover{text-decoration:underline;}
+
+/* ── 页脚 ── */
+.shr-footer{margin-top:48px;text-align:center;color:#999;font-size:11.5px;
+  padding-top:20px;border-top:1px solid #eaecef;}
+
+/* ── 响应式：移动端 ≤480px ── */
+@media screen and (max-width:480px){
+  .shr-wrap{padding:16px 12px 36px!important;}
+  .shr-h1{font-size:23px!important;}
+  .shr-mtitle{font-size:17px!important;}
+  .shr-card{padding:16px 16px!important;border-radius:10px!important;}
+  .shr-it-title{font-size:17px!important;}
+  .shr-field{font-size:13.5px!important;margin:12px 0 4px!important;padding-left:8px!important;}
+  .shr-ftext{font-size:13.5px!important;padding-left:8px!important;}
+  .shr-persp{padding:10px 12px!important;}
+  .shr-persp p{font-size:13.5px!important;}
+  .shr-summary{padding:16px!important;}
+  .shr-lede{padding:12px 14px!important;font-size:14px!important;}
+}
+
+/* ── 防止图片/表格溢出 ── */
+.shr-card img{max-width:100%!important;height:auto!important;border-radius:6px;}
+.shr-card table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.shr-card pre{white-space:pre-wrap;word-break:break-all;font-size:13px!important;
+  background:#f7f8fa;padding:12px;border-radius:8px;overflow-x:auto;}
 """
 
+# ── 模块定义 ──
 MODULES = [
     ("project_opportunities", "项目机会库", "m1"),
-    ("growth_operations", "增长运营", "m2"),
-    ("views_insights", "观点心法", "m3"),
+    ("growth_operations",     "增长运营",   "m2"),
+    ("views_insights",        "观点心法",   "m3"),
 ]
-ITEM_FIELDS = [
-    ("signal", "信号"),
-    ("why_now", "为什么现在还能做"),
-    ("how_to", "建议怎么做"),
-    ("monetization", "变现说明"),
-    ("replicable", "可复制性"),
-    ("perspective", "副业视角解读"),
+
+# ── 创业画布字段定义（顺序=显示顺序）──
+# (json_key, display_label)
+CANVAS_FIELDS = [
+    ("signal",              "信号 / 趋势"),
+    ("target_customer",     "目标客户"),
+    ("value_proposition",   "价值主张"),
+    ("how_to_mvp",          "建议怎么做 / MVP"),
+    ("acquisition_channel", "获客渠道"),
+    ("monetization",        "变现说明与数据表现"),
+    ("startup_cost",        "启动成本"),
+    ("replicability",       "可复制性 / 壁垒"),
+    ("perspective",         "副业视角"),
 ]
 
 
 def _domain(u):
+    """从 URL 提取域名（去 www.）。"""
     try:
         return urlparse(u).netloc.replace("www.", "")
     except Exception:
         return u
 
 
+def _esc(s):
+    """HTML 转义。"""
+    return html_lib.escape(str(s)) if s else ""
+
+
 def render_item(it, modcls):
-    title = html.escape(it.get("title", ""))
-    src_name = html.escape(it.get("source_name", ""))
-    src_url = html.escape(it.get("source_url", ""))
+    """渲染单条卡片。空字段不展示（标题+内容都隐藏）。"""
+    title = _esc(it.get("title", ""))
+    src_name = _esc(it.get("source_name", ""))
+    src_url = _esc(it.get("source_url", ""))
+
     rows = ""
-    for key, label in ITEM_FIELDS:
+    for key, label in CANVAS_FIELDS:
         val = it.get(key)
-        if not val:
-            continue
+        if not val or not str(val).strip():
+            continue  # 空字段：跳过，不输出标题也不占位
+
+        val_str = str(val).strip()
         if key == "perspective":
-            rows += (f'<h3 class="field per">副业视角解读：</h3>\n'
-                     f'<div class="perspective"><p>{html.escape(str(val))}</p></div>')
+            # 副业视角：紫色引用块
+            rows += (
+                f'<h3 class="field per shr-field per">副业视角：</h3>\n'
+                f'<div class="perspective shr-persp"><p>{_esc(val_str)}</p></div>\n'
+            )
         else:
-            rows += (f'<h3 class="field {modcls}">{label}：</h3>\n'
-                     f'<p class="ftext">{html.escape(str(val))}</p>')
-    return f'''<article class="item">
-<h3 class="it-title">{title}</h3>
-<div class="it-meta">来源：{src_name} · <a href="{src_url}" target="_blank" rel="noopener">阅读原文 →</a></div>
-{rows}
-</article>'''
+            rows += (
+                f'<h3 class="field {modcls} shr-field {modcls}">{_esc(label)}：</h3>\n'
+                f'<p class="ftext shr-ftext">{_esc(val_str)}</p>\n'
+            )
+
+    return (
+        f'<article class="card shr-card">\n'
+        f'<h3 class="it-title shr-it-title">{title}</h3>\n'
+        f'<div class="it-meta shr-it-meta">'
+        f'来源：{src_name} · '
+        f'<a href="{src_url}" target="_blank" rel="noopener noreferrer">阅读原文 →</a>'
+        f'</div>\n'
+        f'{rows}'
+        f'</article>'
+    )
 
 
 def render(report):
+    """将完整 report JSON 渲染为带内联样式的 HTML 片段。"""
     date = report.get("date", C.date_str())
     total = sum(len(report["modules"].get(k, [])) for k, _, _ in MODULES)
-    body = f'''<header class="top">
-<div class="kicker">AI 副业日报</div>
-<h1>副业日报 · {html.escape(date)}</h1>
-<div class="date">{html.escape(date)}（北京时间）· 自动生成</div>
-</header>
-<div class="lede">今日共筛出 {total} 条增量信号，按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>'''
-    for key, title, cls in MODULES:
+
+    body = (
+        f'<header class="top shr-header">\n'
+        f'<div class="kicker shr-kicker">AI 副业日报</div>\n'
+        f'<h1 class="shr-h1">副业日报 · {_esc(date)}</h1>\n'
+        f'<div class="date shr-date">{_esc(date)}（北京时间）· 自动生成</div>\n'
+        f'</header>\n'
+        f'<div class="lede shr-lede">今日共筛出 <strong>{total}</strong> 条增量信号，'
+        f'按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>\n'
+    )
+
+    for key, mtitle, cls in MODULES:
         items = report["modules"].get(key, [])
         if not items:
             continue
         cards = "".join(render_item(it, cls) for it in items)
-        body += f'''<section class="module {cls}">
-<div class="m-head"><span class="m-tag"></span><h2 class="m-title">{title}</h2>
-<span class="m-count">精选 {len(items)}</span></div>{cards}</section>'''
+        body += (
+            f'<section class="module shr-mod {cls}">\n'
+            f'<div class="mhead shr-mhead">'
+            f'<span class="mtag shr-mtag"></span>'
+            f'<h2 class="mtitle shr-mtitle">{mtitle}</h2>'
+            f'<span class="mcount shr-mcount">精选 {len(items)}</span>'
+            f'</div>\n'
+            f'{cards}\n'
+            f'</section>\n'
+        )
+
+    # ── 每日总结（含方法论）──
     ds = report.get("daily_summary", {})
-    meth = html.escape(ds.get("methodology", ""))
-    # 证据文字链：优先用条目里的来源名/标题，否则退化为域名
-    url_map = {}
-    for key, _, _ in MODULES:
-        for it in report["modules"].get(key, []):
-            u = it.get("source_url")
-            if u:
-                url_map[u] = (it.get("source_name", ""), it.get("title", ""))
-    ev_parts = []
-    for u in ds.get("evidence", []):
-        sn, ti = url_map.get(u, ("", ""))
-        label = ti or sn or _domain(u)
-        ev_parts.append(
-            f'<a href="{html.escape(u)}" target="_blank" rel="noopener">{html.escape(label)}</a>')
-    ev = " · ".join(ev_parts)
+    meth = ds.get("methodology", "")
     if meth:
-        body += f'''<section class="module"><div class="summary">
-<h2>📌 每日总结 · 今日可复用方法论</h2>
-<div class="meth">{meth}</div>
-<div class="evidence">证据：{ev}</div></div></section>'''
-    return (f'<style>{CSS}</style>\n'
-            f'<div class="wrap">{body}'
-            f'<footer>本文由 GitHub Actions 自动生成并发布。</footer></div>')
+        # 证据文字链：优先用条目里的标题/来源名，否则退化为域名
+        url_map = {}
+        for k, _, _ in MODULES:
+            for it in report["modules"].get(k, []):
+                u = it.get("source_url")
+                if u:
+                    url_map[u] = (it.get("source_name", ""), it.get("title", ""))
+        ev_parts = []
+        for u in ds.get("evidence", []):
+            sn, ti = url_map.get(u, ("", ""))
+            label = ti or sn or _domain(u)
+            ev_parts.append(
+                f'<a href="{_esc(u)}" target="_blank" rel="noopener noreferrer">'
+                f'{_esc(label)}</a>')
+        ev_html = " · ".join(ev_parts)
+
+        body += (
+            f'<section class="module"><div class="summary shr-summary">\n'
+            f'<h2>每日总结 · 可复用方法论</h2>\n'
+            f'<div class="meth shr-meth">{_esc(meth)}</div>\n'
+            f'<div class="evidence shr-ev">证据：{ev_html}</div>\n'
+            f'</div></section>\n'
+        )
+
+    return (
+        f'<style>{CSS}</style>\n'
+        f'<div class="wrap shr-wrap">\n'
+        f'{body}\n'
+        f'<footer class="shr-footer">本文由 GitHub Actions 自动生成并发布。</footer>\n'
+        f'</div>'
+    )
 
 
 def get_category_id(session, base, auth, name):
@@ -210,7 +322,7 @@ def main():
     r = session.post(base + "/wp-json/wp/v2/posts", json=payload, headers=auth, timeout=60)
     r.raise_for_status()
     link = r.json().get("link", "")
-    LOG.info("✅ 已发布: %s", link)
+    LOG.info("已发布: %s", link)
     print("PUBLISHED_URL=" + link)
 
 
