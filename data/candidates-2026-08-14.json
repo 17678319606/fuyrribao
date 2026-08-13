@@ -1,0 +1,258 @@
+[
+  {
+    "id": "cid:https://github.com/TREAFREE",
+    "source_name": "中文独立开发者",
+    "source_url": "https://github.com/TREAFREE",
+    "title": "Github",
+    "content": "#### TREAFREE - [Github](https://github.com/TREAFREE)",
+    "published_at": "2026-08-14T00:26:01.021470+08:00"
+  },
+  {
+    "id": "cid:https://treafree.top/FileIsland/",
+    "source_name": "中文独立开发者",
+    "source_url": "https://treafree.top/FileIsland/",
+    "title": "File Island",
+    "content": "* :white_check_mark: [File Island](https://treafree.top/FileIsland/)：原生 macOS 本地媒体转换工具，驻留在 MacBook 刘海区域，支持图片、视频、音频与混合文件夹批量转换，结果可直接拖入访达或聊天应用，文件不上传云端 - [项目与下载](https://github.com/TREAFREE/FileIsland)",
+    "published_at": "2026-08-14T00:26:01.021497+08:00"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234229#reply0",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234229#reply0",
+    "title": "[分享创造] Chainy v0.2.1 正式开源：一款 macOS 可视化多跳代理链工具",
+    "content": "<p>之前在 V2EX 发过 Chainy v0.1.0 ，当时仓库主要用来提供编译版本。这次重新整理了项目，完整源码已经以 MIT License 开源。</p>\n<p><a href=\"https://github.com/miwuyouth/Chainy\" rel=\"nofollow\">https://github.com/miwuyouth/Chainy</a></p>\n<p><a href=\"https://github.com/miwuyouth/Chainy/releases/latest\" rel=\"nofollow\">https://github.com/miwuyouth/Chainy/releases/latest</a></p>\n<p>Chainy 是一款原生 macOS 多跳代理客户端，主要解决“把已有代理节点按顺序串成一条线路”的问题。</p>",
+    "published_at": "2026-08-13T16:00:42Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234227#reply0",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234227#reply0",
+    "title": "[程序员] dsh 这个缓存命中，真的太顶了",
+    "content": "<p><img alt=\"1786635766344\" class=\"embedded_image\" rel=\"noreferrer\" src=\"https://t.tutu.to/img/01KZXWNVWQHNT17SJNMVWXNDGH\" /></p>\n<p>opencode-go 猛猛蹬，5 小时额度几乎没动</p>",
+    "published_at": "2026-08-13T15:52:47Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234226#reply3",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234226#reply3",
+    "title": "[DeepSeek] 跟着 DSH 发布，今晚开源了三个小东西",
+    "content": "<p>官方 DSH 今天一开，我这边也跟着折腾了一晚上。不是另造一个“原厂 Harness”，主要是补几个自己真想用的缺口。</p>\n<p>最先能玩的还是 GUI：用 Tauri 2 把官方 dsh web 原样放进桌面壳，补了工作区选择、最近项目、主题/中英、钥匙串和托盘。它会在项目目录启动官方 runtime ，只接 127.0.0.1 ，再把页面嵌进窗口。目前源码 CI 绿，但还没发二进制，得自己 build 。</p>\n<p><a href=\"https://github.com/bobleer/deepseek-harness-gui\" rel=\"nofollow\">https://github.com/bobleer/deepseek-harness-gui</a></p>\n<p>另一个是 Plugin MCP ，想解决的是“别的 agent 怎么发现、检查、安装、运行 DSH 插件”。目录检索默认只读，安装和 runtime 都要显式开开关。CI 也是绿的，不过 npm 现在还是 E404 ，所以别照 README 跑 npx ，现阶段只看 GitHub 源码。</p>\n<p><a href=\"https://github.com/bobleer/deepseek-harness-plugin-mcp\" rel=\"nofollow\">https://github.com/bobleer/deepseek-harness-plugin-mcp</a></p>\n<p>第三个 Rust 版只是很早期的 runtime code drop 。当前 CI 卡在 cargo fmt ，默认分支和 README 的 quickstart 也有不一致，先别当成可用替代品，我放出来主要是想让架构讨论有代码可看。</p>\n<p><a href=\"https://github.com/bobleer/deepseek-harness-rust\" rel=\"nofollow\">https://github.com/bobleer/deepseek-harness-rust</a></p>\n<p>利益相关：这些都是我参与的 BitFun 团队衍生出来的。三个仓刚开全是 0 star ，GUI / MCP 方向你觉得有用的话，欢迎去点颗 star 或直接提 issue ，真实踩坑比客套支持更有用。</p>",
+    "published_at": "2026-08-13T15:29:01Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234225#reply0",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234225#reply0",
+    "title": "[Local LLM] 想不到浓眉大眼的 Livid 也受限于邀请链接",
+    "content": "<p>这波裂变真是太强了, 不过受邀注册好才是病毒传播的开始:</p>\n<ul>\n<li>Refer 1 person to unlock full access</li>\n<li>Refer 5 people to become a VIP</li>\n<li>Refer the most people to win the prize</li>\n</ul>\n<p>一个关于本地模型的能力比较网站。</p>\n<p>欢迎使用我的链接注册：\n<a href=\"https://local.ai/zp/invite\" rel=\"nofollow\">https://local.ai/zp/invite</a></p>",
+    "published_at": "2026-08-13T15:28:03Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234224#reply1",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234224#reply1",
+    "title": "[分享创造] DeepSeek Harness 开发编年史",
+    "content": "<p>用 <a href=\"https://github.com/tsonglew/git-repo-chronicle\" rel=\"nofollow\">git-repo-chronicle</a> 做了 DeepSeek Harness 的编年史，记录可能是 GitHub 有史以来涨🌟最快项目诞生的 65 天</p>\n<p>成品在： <a href=\"https://dsh-chronicle-duv8yxo8n-tsonglews-projects.vercel.app/\" rel=\"nofollow\">https://dsh-chronicle-duv8yxo8n-tsonglews-projects.vercel.app/</a></p>\n<p><img alt=\"\" class=\"embedded_image\" rel=\"noreferrer\" src=\"https://dsh-chronicle-duv8yxo8n-tsonglews-projects.vercel.app/images/dsh-ch01.jpg\" /></p>",
+    "published_at": "2026-08-13T14:52:14Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234222#reply2",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234222#reply2",
+    "title": "[Nintendo Switch] 孩子快 4 周岁了，想给他买 switch，各位怎么看",
+    "content": "我的育娃原则是尽可能让他体验各式各样的东西，鼓励他自主探索，比如最近带他去游泳馆，2 次就学会了水中憋气吐气，可我也没有那个时间精力天天带他出去玩，于是就想着买台 switch 给他，这样可以在家对战（只接电视玩），要说但是了，我这代人小时候父母老是视游戏如洪水猛兽，自己小时候在这方面确实听话，基本没接触过这些东西，导致对 PC 游戏的记忆只停留在初中网吧的暗黑破坏神 3 上，手机里的游戏更是一个没有，可回头想想，也许是性格问题，也许是这种压抑自己的刻意行为，思想也偏向保守，想在孩子身上改变一下，巧了这孩子挺灵的，观察力惊人，就想着提前让他在幼儿园阶段对劣质游戏脱敏，避免他上学后对手机游戏上瘾，于是就有了给他买 switch 游戏机的想法，各位可否给我一些意见，谢谢。",
+    "published_at": "2026-08-13T14:46:05Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234221#reply0",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234221#reply0",
+    "title": "[程序员] 今天一天梁圣的口碑是不是要下滑到小梁们",
+    "content": "<p>目前看滑动变阻器是不是需要新的挡位“小梁们”了\n哈哈哈哈哈哈哈\n模型发了又撤回，乱糟糟的</p>",
+    "published_at": "2026-08-13T14:33:03Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234220#reply1",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234220#reply1",
+    "title": "[DeepSeek] 关于 deepseek 涨价+v4pro 这么拉",
+    "content": "<p>声明：本人一直在互联网上诋毁深度求索，并没有称梁文锋为梁圣，也支持将梁文锋的头 P 到劲凉上。本人实际上是深度求索十年黑粉，经过长时间的思考，我发现中国 AI 其实没有希望，有时候做出决定很难，经过许多个日夜的思考，我决定加入 openai 粉丝团。至于 Kimi ，GLM 和 Minimax ，祝他们的 token 套餐越卖越贵。望周知！</p>",
+    "published_at": "2026-08-13T14:31:37Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234219#reply1",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234219#reply1",
+    "title": "[问与答] 朋友相亲问题被拒询问一下什么情况",
+    "content": "朋友是男孩子，1.7m ，相亲的女孩子 1.7m 。<br />今天下午朋友家长带着去相亲了。<br />到了后说你们进小屋聊聊。<br /><br />然后就进去啦：<br />女孩直接问：学的什么专业，有工作吗？<br />男孩说：学的飞机，实习啦半年，目前没有工作。（女孩看着一直想出去的样子）<br />女孩说：还有啥想问的吗？<br />男孩说：你学的啥？<br />女孩说：幼师<br />男孩说：这是第一次相亲，不知道说啥。（女孩然后说我们出去吧）<br /><br />然后出去了，男孩不知道相亲要加 wx ，然后外面的家长问加 wx 了吗？<br />于是女孩说：他也没给我要！<br />男孩说：第一次相亲，不知道这个，不好意思！<br />（注意：这里说男孩扫女孩的微信，女孩微信点同意才能加上）<br /><br />然后离开女孩家，过了几个小时，女孩始终没点同意，于是没加上。<br /><br />所以这个是什么问题？是女孩没看上，还是女孩以为男孩没看上？",
+    "published_at": "2026-08-13T14:23:12Z"
+  },
+  {
+    "id": "https://www.v2ex.com/t/1234218#reply3",
+    "source_name": "V2EX",
+    "source_url": "https://www.v2ex.com/t/1234218#reply3",
+    "title": "[程序员] DeepSeek Harness 先不用管原理，直接抢先体验",
+    "content": "大家体感如何",
+    "published_at": "2026-08-13T14:20:25Z"
+  },
+  {
+    "id": "https://www.seangoedecke.com/text-ai-watermarks/",
+    "source_name": "Hacker News",
+    "source_url": "https://www.seangoedecke.com/text-ai-watermarks/",
+    "title": "Text AI watermarks will always be trivial to remove",
+    "content": "<p>Article URL: <a href=\"https://www.seangoedecke.com/text-ai-watermarks/\">https://www.seangoedecke.com/text-ai-watermarks/</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49287153\">https://news.ycombinator.com/item?id=49287153</a></p>\n<p>Points: 19</p>\n<p># Comments: 16</p>",
+    "published_at": "Thu, 13 Aug 2026 15:07:10 +0000"
+  },
+  {
+    "id": "https://www.wired.com/story/mcdonalds-built-a-515-page-dossier-on-me-it-says-ill-never-leave/",
+    "source_name": "Hacker News",
+    "source_url": "https://www.wired.com/story/mcdonalds-built-a-515-page-dossier-on-me-it-says-ill-never-leave/",
+    "title": "I requested a copy of my data from McDonald’s loyalty program",
+    "content": "<p>Article URL: <a href=\"https://www.wired.com/story/mcdonalds-built-a-515-page-dossier-on-me-it-says-ill-never-leave/\">https://www.wired.com/story/mcdonalds-built-a-515-page-dossier-on-me-it-says-ill-never-leave/</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49286662\">https://news.ycombinator.com/item?id=49286662</a></p>\n<p>Points: 58</p>\n<p># Comments: 51</p>",
+    "published_at": "Thu, 13 Aug 2026 14:37:51 +0000"
+  },
+  {
+    "id": "https://www.flocksafety.com/blog/flock-guardrails-address-lpr-privacy-concerns-and-police-transparency",
+    "source_name": "Hacker News",
+    "source_url": "https://www.flocksafety.com/blog/flock-guardrails-address-lpr-privacy-concerns-and-police-transparency",
+    "title": "Flock Safety changes system defaults in response to criticisms",
+    "content": "<p>Article URL: <a href=\"https://www.flocksafety.com/blog/flock-guardrails-address-lpr-privacy-concerns-and-police-transparency\">https://www.flocksafety.com/blog/flock-guardrails-address-lpr-privacy-concerns-and-police-transparency</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49286654\">https://news.ycombinator.com/item?id=49286654</a></p>\n<p>Points: 19</p>\n<p># Comments: 24</p>",
+    "published_at": "Thu, 13 Aug 2026 14:37:29 +0000"
+  },
+  {
+    "id": "https://oxide.computer/blog/kubernetes-on-oxide",
+    "source_name": "Hacker News",
+    "source_url": "https://oxide.computer/blog/kubernetes-on-oxide",
+    "title": "Kubernetes on Oxide: How Customer Needs Shaped Our Integrations",
+    "content": "<p>Article URL: <a href=\"https://oxide.computer/blog/kubernetes-on-oxide\">https://oxide.computer/blog/kubernetes-on-oxide</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49286485\">https://news.ycombinator.com/item?id=49286485</a></p>\n<p>Points: 45</p>\n<p># Comments: 6</p>",
+    "published_at": "Thu, 13 Aug 2026 14:26:41 +0000"
+  },
+  {
+    "id": "https://www.quantamagazine.org/graduate-student-proves-the-fractal-uncertainty-principle-20260812/",
+    "source_name": "Hacker News",
+    "source_url": "https://www.quantamagazine.org/graduate-student-proves-the-fractal-uncertainty-principle-20260812/",
+    "title": "Graduate Student Proves a Quantum Uncertainty Principle for Fractals",
+    "content": "<p>Article URL: <a href=\"https://www.quantamagazine.org/graduate-student-proves-the-fractal-uncertainty-principle-20260812/\">https://www.quantamagazine.org/graduate-student-proves-the-fractal-uncertainty-principle-20260812/</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49286424\">https://news.ycombinator.com/item?id=49286424</a></p>\n<p>Points: 15</p>\n<p># Comments: 0</p>",
+    "published_at": "Thu, 13 Aug 2026 14:22:54 +0000"
+  },
+  {
+    "id": "https://www.echo.ai/blog/echo-xnanoclaw-under-the-hood",
+    "source_name": "Hacker News",
+    "source_url": "https://www.echo.ai/blog/echo-xnanoclaw-under-the-hood",
+    "title": "We eliminated 1,400 CVEs in NanoClaw's container images",
+    "content": "<p>Article URL: <a href=\"https://www.echo.ai/blog/echo-xnanoclaw-under-the-hood\">https://www.echo.ai/blog/echo-xnanoclaw-under-the-hood</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49286357\">https://news.ycombinator.com/item?id=49286357</a></p>\n<p>Points: 24</p>\n<p># Comments: 7</p>",
+    "published_at": "Thu, 13 Aug 2026 14:18:34 +0000"
+  },
+  {
+    "id": "https://opscode.io/posts/ptp-grandmaster-cm4-sr1723u10/",
+    "source_name": "Hacker News",
+    "source_url": "https://opscode.io/posts/ptp-grandmaster-cm4-sr1723u10/",
+    "title": "Build a Stratum 1 PTP Grandmaster on a Budget",
+    "content": "<p>Article URL: <a href=\"https://opscode.io/posts/ptp-grandmaster-cm4-sr1723u10/\">https://opscode.io/posts/ptp-grandmaster-cm4-sr1723u10/</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49286211\">https://news.ycombinator.com/item?id=49286211</a></p>\n<p>Points: 7</p>\n<p># Comments: 1</p>",
+    "published_at": "Thu, 13 Aug 2026 14:08:44 +0000"
+  },
+  {
+    "id": "https://ordinaryabundance.com/",
+    "source_name": "Hacker News",
+    "source_url": "https://ordinaryabundance.com/",
+    "title": "Ordinary Abundance",
+    "content": "<p>Article URL: <a href=\"https://ordinaryabundance.com/\">https://ordinaryabundance.com/</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49285770\">https://news.ycombinator.com/item?id=49285770</a></p>\n<p>Points: 12</p>\n<p># Comments: 0</p>",
+    "published_at": "Thu, 13 Aug 2026 13:39:41 +0000"
+  },
+  {
+    "id": "https://github.com/deepseek-ai/deepseek-harness",
+    "source_name": "Hacker News",
+    "source_url": "https://github.com/deepseek-ai/deepseek-harness",
+    "title": "DeepSeek Harness",
+    "content": "<p>Article URL: <a href=\"https://github.com/deepseek-ai/deepseek-harness\">https://github.com/deepseek-ai/deepseek-harness</a></p>\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49285244\">https://news.ycombinator.com/item?id=49285244</a></p>\n<p>Points: 328</p>\n<p># Comments: 152</p>",
+    "published_at": "Thu, 13 Aug 2026 12:58:02 +0000"
+  },
+  {
+    "id": "https://twitter.com/deepseek_ai/status/2087864589895798968",
+    "source_name": "Hacker News",
+    "source_url": "https://twitter.com/deepseek_ai/status/2087864589895798968",
+    "title": "DeepSeek API Pricing Update",
+    "content": "<p><a href=\"https://xcancel.com/deepseek_ai/status/2087864589895798968\" rel=\"nofollow\">https://xcancel.com/deepseek_ai/status/2087864589895798968</a></p>\n<hr />\n<p>Comments URL: <a href=\"https://news.ycombinator.com/item?id=49285160\">https://news.ycombinator.com/item?id=49285160</a></p>\n<p>Points: 80</p>\n<p># Comments: 30</p>",
+    "published_at": "Thu, 13 Aug 2026 12:49:21 +0000"
+  },
+  {
+    "id": "https://www.producthunt.com/products/oasis-6",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/oasis-6",
+    "title": "Oasis",
+    "content": "<p>\n            Where humans and agents come to work.\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/oasis-6?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1220624?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-11T10:33:46-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/scrimba",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/scrimba",
+    "title": "Scrimba Explain",
+    "content": "<p>\n            Ask any question, get a video back instantly\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/scrimba?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1214956?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-04T09:49:47-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/ito-ai-code-review-that-runs-code",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/ito-ai-code-review-that-runs-code",
+    "title": "Ito",
+    "content": "<p>\n            AI code review that runs your code\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/ito-ai-code-review-that-runs-code?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1204836?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-07-23T10:38:37-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/kivicube",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/kivicube",
+    "title": "Kivicube",
+    "content": "<p>\n            Create AR experiences with AI, no code required!\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/kivicube?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1221718?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-12T16:52:57-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/webbrain",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/webbrain",
+    "title": "WebBrain",
+    "content": "<p>\n            The sidebar agent for the rest of us\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/webbrain?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1194941?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-07-13T00:42:44-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/caveman",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/caveman",
+    "title": "Caveman",
+    "content": "<p>\n            why use many token when few do trick\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/caveman?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1220849?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-11T16:39:36-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/coarena-by-coasty",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/coarena-by-coasty",
+    "title": "Coarena by Coasty",
+    "content": "<p>\n            The arena where agents battle on real-world work\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/coarena-by-coasty?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1215977?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-05T12:20:58-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/kitbitz",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/kitbitz",
+    "title": "Kitbitz",
+    "content": "<p>\n            2K+ free hand-drawn illustrations for your projects, CC0\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/kitbitz?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1221100?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-12T00:42:53-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/dishylink",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/dishylink",
+    "title": "Dishylink",
+    "content": "<p>\n            Open-source Starlink monitoring app for Mac, Windows and Web\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/dishylink?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1221239?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-12T03:53:08-07:00"
+  },
+  {
+    "id": "https://www.producthunt.com/products/pickle-browser",
+    "source_name": "Product Hunt",
+    "source_url": "https://www.producthunt.com/products/pickle-browser",
+    "title": "Pickle Browser",
+    "content": "<p>\n            Browser for your agent. Runs local in a window you can see\n          </p>\n          <p>\n            <a href=\"https://www.producthunt.com/products/pickle-browser?utm_campaign=producthunt-atom-posts-feed&amp;utm_medium=rss-feed&amp;utm_source=producthunt-atom-posts-feed\">Discussion</a>\n            |\n            <a href=\"https://www.producthunt.com/r/p/1221616?app_id=339\">Link</a>\n          </p>",
+    "published_at": "2026-08-12T13:05:25-07:00"
+  }
+]
