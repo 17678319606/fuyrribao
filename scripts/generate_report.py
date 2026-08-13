@@ -243,25 +243,58 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
 
 
 def _extract_json(text):
-    """从模型输出里抠出 JSON（兼容 ```json 围栏 / 前后多余文字 / 中文引号）。"""
+    """从模型输出里抠出 JSON（兼容 ```json 围栏/前后文字/中文引号/字符串内含括号）。"""
     if not text:
         return None
     s = text.strip()
     if "```" in s:
-        m = re.search(r"```(?:json)?\s*(.*?)```", s, re.S)
-        if m:
-            s = m.group(1).strip()
-    a = s.find("{")
-    b = s.rfind("}")
-    if a != -1 and b != -1 and b > a:
-        s = s[a:b + 1]
-    for cand in (s, s.replace("“", "\"").replace("”", "\""),
+        s = re.sub(r"```(?:json)?\s*", "", s)
+        s = s.replace("```", "")
+    start = s.find("{")
+    if start == -1:
+        return None
+    # 括号平衡提取最外层对象（正确处理字符串值内的 { } 与转义字符）
+    depth = 0
+    in_str = False
+    esc = False
+    end = -1
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return None
+    s = s[start:end + 1]
+    for cand in (s,
+                 s.replace("“", "\"").replace("”", "\""),
                  s.replace("‘", "'").replace("’", "'")):
         try:
             return json.loads(cand)
         except Exception:
             continue
-    return None
+    # 兜底：去 trailing comma 与 // 注释再试
+    try:
+        cleaned = re.sub(r",(\s*[}\]])", r"\1", s)
+        cleaned = re.sub(r"//[^\n]*", "", cleaned)
+        cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.S)
+        return json.loads(cleaned)
+    except Exception:
+        return None
 
 
 def _validate(report):
@@ -342,7 +375,7 @@ def main():
     # 4) 解析 + 校验
     report = _extract_json(content)
     if report is None:
-        LOG.error("AI 返回无法解析为 JSON，原始前 500 字：%s", content[:500])
+        LOG.error("AI 返回无法解析为 JSON，完整内容(%d字)：\n%s", len(content), content)
         raise SystemExit("invalid AI json")
     _validate(report)
     report["date"] = today
