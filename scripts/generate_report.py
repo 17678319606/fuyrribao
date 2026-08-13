@@ -68,10 +68,11 @@ _DNS_PATCH_HOSTS = {}
 
 
 def _doh_resolve(host):
-    """通过 Cloudflare DoH 解析 A 记录，返回 IP 列表。"""
+    """通过 DoH（Cloudflare / Google 兜底）解析 A 记录，返回 IP 列表。"""
     try:
         import urllib.request
-        q = json.dumps({"name": host, "type": "A"}).encode()
+        # Cloudflare DoH（POST，type 必须为整数）
+        q = json.dumps({"name": host, "type": 1}).encode()
         req = urllib.request.Request(
             "https://cloudflare-dns.com/dns-query", data=q,
             headers={"Content-Type": "application/dns-json",
@@ -79,7 +80,14 @@ def _doh_resolve(host):
         with urllib.request.urlopen(req, timeout=10) as r:
             d = json.loads(r.read())
         ips = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
-        return ips
+        if ips:
+            return ips
+        # Google DoH 兜底（GET）
+        g = urllib.request.Request(
+            "https://dns.google/resolve?name=" + host + "&type=A")
+        with urllib.request.urlopen(g, timeout=10) as r:
+            d = json.loads(r.read())
+        return [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
     except Exception as e:
         LOG.warning("DoH 解析 %s 失败: %s", host, e)
         return []
@@ -147,10 +155,12 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                 resp.raise_for_status()
                 # 流式聚合 SSE
                 content = ""
+                raw_dump = []
                 for raw_line in resp.iter_lines(decode_unicode=True):
                     if not raw_line:
                         continue
                     line = raw_line.strip()
+                    raw_dump.append(line)
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()
@@ -164,7 +174,10 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                     if delta:
                         content += delta
                 if not content:
-                    raise RuntimeError("流式响应为空")
+                    # 诊断：把原始响应前若干行打出来，便于判断是鉴权错误/Challenge/格式差异
+                    snippet = " | ".join(raw_dump[:15])[:800]
+                    LOG.error("流式响应为空，原始响应片段：%s", snippet)
+                    raise RuntimeError("流式响应为空（见上方原始片段）")
                 LOG.info("AI 请求成功（端点=%s，约 %d 字）", label, len(content))
                 return content
             except (requests.exceptions.ConnectionError,
