@@ -17,6 +17,7 @@ import re
 import random
 import socket
 import logging
+from urllib.parse import urlparse
 
 import requests
 
@@ -35,16 +36,40 @@ MAX_INPUT_SIGNALS = 40      # 送入 AI 的候选上限（控制输入上下文�
 MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生成耗时，避免 Cloudflare 524）
 
 
+def _is_valid_proxy(p):
+    """校验代理 URL 合法且非占位符（避免中文/字面占位符被当成真实代理）。"""
+    try:
+        u = urlparse(p)
+    except Exception:
+        return False
+    if u.scheme not in ("http", "https", "socks5", "socks4"):
+        return False
+    host = u.hostname or ""
+    if not host:
+        return False
+    if not host.isascii():
+        return False
+    low = p.lower()
+    if any(k in low for k in ("代理", "placeholder", "example", "xxxx",
+                              "your_", "ip:端口", "ip:port", "ip:端口")):
+        return False
+    return True
+
+
 def _parse_proxies():
-    """从 AI_PROXY_POOL 解析代理列表，过滤空值。"""
+    """从 AI_PROXY_POOL 解析代理列表，过滤空值与无效/占位符配置。"""
     raw = os.environ.get("AI_PROXY_POOL", "").strip()
     if not raw:
         return []
     out = []
     for p in re.split(r"[;,\n]", raw):
         p = p.strip()
-        if p:
+        if not p:
+            continue
+        if _is_valid_proxy(p):
             out.append(p)
+        else:
+            LOG.warning("跳过无效/占位符代理配置: %s", p[:50])
     return out
 
 
@@ -191,6 +216,7 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                 return content
             except (requests.exceptions.ConnectionError,
                     requests.exceptions.Timeout,
+                    requests.exceptions.InvalidURL,
                     socket.gaierror) as e:
                 # DNS 解析失败 / 连接被重置 / 超时 —— 典型海外 Runner 抖动
                 last_err = e
