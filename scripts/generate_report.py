@@ -33,6 +33,12 @@ def _validate(report):
         assert key in mods, f"缺少模块 {key}"
         assert isinstance(mods[key], list), f"{key} 不是数组"
     assert "daily_summary" in report, "缺少 daily_summary"
+    # v2: 校验 item 必填字段
+    for key, items in mods.items():
+        for i, it in enumerate(items):
+            assert isinstance(it, dict), f"{key}[{i}] 不是对象"
+            for fld in ("id", "source_name", "source_url", "title"):
+                assert it.get(fld), f"{key}[{i}] 缺少必填字段 {fld}"
     return True
 
 
