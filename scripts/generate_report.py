@@ -61,9 +61,61 @@ def _is_retryable_http(status):
     return status == 429 or (500 <= status < 600)
 
 
+# ── DNS-over-HTTPS 兜底：海外 Runner 偶发解析不到国内域名时，
+#    用 Cloudflare DoH（全球可达）拿到真实 A 记录并固定给目标 host，
+#    从而直连也能稳定解析（SNI/证书均保持原 host，验证不受影响）。──
+_DNS_PATCH_HOSTS = {}
+
+
+def _doh_resolve(host):
+    """通过 Cloudflare DoH 解析 A 记录，返回 IP 列表。"""
+    try:
+        import urllib.request
+        q = json.dumps({"name": host, "type": "A"}).encode()
+        req = urllib.request.Request(
+            "https://cloudflare-dns.com/dns-query", data=q,
+            headers={"Content-Type": "application/dns-json",
+                      "Accept": "application/dns-json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read())
+        ips = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
+        return ips
+    except Exception as e:
+        LOG.warning("DoH 解析 %s 失败: %s", host, e)
+        return []
+
+
+def _install_dns_patch(host):
+    """若尚未修补，用 DoH 结果固定该 host 的 getaddrinfo 解析。"""
+    if _DNS_PATCH_HOSTS.get(host):
+        return
+    ips = _doh_resolve(host)
+    if not ips:
+        return
+    target = ips[0]
+    orig = socket.getaddrinfo
+
+    def _patched(h, *args, **kwargs):
+        if h == host:
+            port = args[0] if args and isinstance(args[0], int) else 443
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (target, port))]
+        return orig(h, *args, **kwargs)
+
+    socket.getaddrinfo = _patched
+    _DNS_PATCH_HOSTS[host] = target
+    LOG.info("DoH 兜底：%s 固定解析到 %s（后续直连不再依赖 Runner 本地 DNS）", host, target)
+
+
 def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
     """调用 /chat/completions，带端点轮换 + 重试。返回模型原始 content 字符串。"""
     url = base_url.rstrip("/") + "/chat/completions"
+    # 解析目标 host（从 base_url 提取），用 DoH 兜底修补海外 Runner 的偶发 DNS 失败
+    try:
+        _host = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(base_url).netloc or "ai.jinbufenzi.com"
+    except Exception:
+        _host = "ai.jinbufenzi.com"
+    _install_dns_patch(_host)
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
