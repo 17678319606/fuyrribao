@@ -68,10 +68,20 @@ _DNS_PATCH_HOSTS = {}
 
 
 def _doh_resolve(host):
-    """通过 DoH（Cloudflare / Google 兜底）解析 A 记录，返回 IP 列表。"""
+    """通过 DoH 解析 A 记录，返回 IP 列表。Google GET 优先（稳定），Cloudflare POST 兜底。"""
+    import urllib.request
+    # 1) Google DoH（GET，最稳）
     try:
-        import urllib.request
-        # Cloudflare DoH（POST，type 必须为整数）
+        g = urllib.request.Request("https://dns.google/resolve?name=" + host + "&type=A")
+        with urllib.request.urlopen(g, timeout=10) as r:
+            d = json.loads(r.read())
+        ips = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
+        if ips:
+            return ips
+    except Exception as e:
+        LOG.warning("Google DoH 解析 %s 失败: %s", host, e)
+    # 2) Cloudflare DoH（POST）
+    try:
         q = json.dumps({"name": host, "type": 1}).encode()
         req = urllib.request.Request(
             "https://cloudflare-dns.com/dns-query", data=q,
@@ -79,18 +89,10 @@ def _doh_resolve(host):
                       "Accept": "application/dns-json"})
         with urllib.request.urlopen(req, timeout=10) as r:
             d = json.loads(r.read())
-        ips = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
-        if ips:
-            return ips
-        # Google DoH 兜底（GET）
-        g = urllib.request.Request(
-            "https://dns.google/resolve?name=" + host + "&type=A")
-        with urllib.request.urlopen(g, timeout=10) as r:
-            d = json.loads(r.read())
         return [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
     except Exception as e:
-        LOG.warning("DoH 解析 %s 失败: %s", host, e)
-        return []
+        LOG.warning("Cloudflare DoH 解析 %s 失败: %s", host, e)
+    return []
 
 
 def _install_dns_patch(host):
@@ -153,13 +155,16 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                     proxies=proxies, timeout=REQ_TIMEOUT, stream=True,
                 )
                 resp.raise_for_status()
-                # 流式聚合 SSE
+                # 流式聚合 SSE（强制 UTF-8 解码，避免中文被误判为 Latin-1 破坏 JSON）
                 content = ""
                 raw_dump = []
-                for raw_line in resp.iter_lines(decode_unicode=True):
+                for raw_line in resp.iter_lines(decode_unicode=False):
                     if not raw_line:
                         continue
-                    line = raw_line.strip()
+                    try:
+                        line = raw_line.decode("utf-8").strip()
+                    except Exception:
+                        line = raw_line.decode("utf-8", "replace").strip()
                     raw_dump.append(line)
                     if not line.startswith("data:"):
                         continue
