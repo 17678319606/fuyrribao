@@ -230,11 +230,17 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                     continue
                 LOG.info("AI 请求成功（端点=%s，约 %d 字）", label, len(content))
                 return content
+            except socket.gaierror as e:
+                # DNS 解析失败（域名不存在 / 无法解析）是「确定性失败」——
+                # 例如 ai.jinbufenzi.com 子域未配置 DNS 记录，重试必败且白白浪费数分钟，
+                # 直接抛出以快速触发降级兜底，避免 workflow 卡死。
+                last_err = e
+                LOG.error("DNS 解析失败（域名不可用，确定性失败），立即失败触发降级：%s", e)
+                raise
             except (requests.exceptions.ConnectionError,
                     requests.exceptions.Timeout,
-                    requests.exceptions.InvalidURL,
-                    socket.gaierror) as e:
-                # DNS 解析失败 / 连接被重置 / 超时 —— 典型海外 Runner 抖动
+                    requests.exceptions.InvalidURL) as e:
+                # 连接被重置 / 超时 —— 典型海外 Runner 偶发抖动，退避重试仍有意义
                 last_err = e
                 wait = BACKOFF_BASE * (2 ** (attempt - 1))
                 LOG.warning("端点 %s 连接失败(%s)，%ds 后重试",
@@ -359,6 +365,63 @@ def _empty_report(date):
     }
 
 
+def _degraded_report(date, signals):
+    """AI 不可用时的降级日报：把原始候选按源采样，构造「今日信号速览」。
+
+    仍符合 publish_wp.py 的渲染结构（title / source_name / source_url / signal），
+    并标记 ai_failed=True 以便前端渲染降级横幅。AI 端点恢复后自动切回精筛日报。
+    """
+    import re
+    from collections import OrderedDict
+
+    def strip_html(s):
+        if not s:
+            return ""
+        return re.sub(r"<[^>]+>", "", str(s)).strip()
+
+    # 按源分组，每组取较新若干条；总分上限，避免单源爆量
+    groups = OrderedDict()
+    for s in signals:
+        groups.setdefault(s.get("source_name", "未知"), []).append(s)
+    picked, per_src, CAP = [], 3, 60
+    for items in groups.values():
+        items_sorted = sorted(items, key=lambda x: x.get("published_at") or "", reverse=True)
+        picked.extend(items_sorted[:per_src])
+        if len(picked) >= CAP:
+            break
+    picked = picked[:CAP]
+
+    items_out = []
+    for s in picked:
+        url = s.get("url") or s.get("id") or ""
+        summary = strip_html(s.get("content") or "")
+        if len(summary) > 600:
+            summary = summary[:600] + "…"
+        items_out.append({
+            "title": s.get("title", "（无标题）"),
+            "source_name": s.get("source_name", "未知"),
+            "source_url": url,
+            "signal": summary or "（原文无摘要，点击阅读原文）",
+        })
+
+    return {
+        "date": date,
+        "timezone": "Asia/Shanghai",
+        "ai_failed": True,
+        "modules": {
+            "project_opportunities": items_out,
+            "growth_operations": [],
+            "views_insights": [],
+        },
+        "daily_summary": {
+            "methodology": ("⚠️ AI 精筛引擎暂不可用（ai.jinbufenzi.com 域名解析失败），"
+                            "本篇为「今日信号速览」——原始采集信号未经 AI 筛选，"
+                            "点击卡片可阅读原文。修复 AI 端点后将自动恢复 AI 精筛日报。"),
+            "evidence": [],
+        },
+    }
+
+
 def _screen_system_prompt():
     return (
         "你是副业/创业领域的内容筛选专家。任务：从一批候选信号中，"
@@ -425,6 +488,7 @@ def main():
         signals = candidates
     else:
         signals = candidates.get("candidates") or candidates.get("items") or []
+    raw_signals = list(signals)  # 保留原始候选快照，供 AI 失败时降级速览使用
 
     # 提前读取 AI 配置（供分批筛选复用）
     base_url = os.environ.get("AI_BASE_URL", "https://ai.jinbufenzi.com/v1")
@@ -480,52 +544,63 @@ def main():
     )
 
     # 3) 调用 AI（外层生成级重试：应对空生成 / 解析失败 / 结构不完整）
-    content = None
+    #    整个生成过程包在 try 中：一旦 AI 彻底不可用（如 DNS 失效），
+    #    捕获 SystemExit 降级为「今日信号速览」，保证每天仍有内容发布。
     report = None
-    for gen in range(1, GEN_RETRIES + 1):
-        try:
-            content = _call_ai(base_url, api_key, model, system_prompt, user_prompt)
-        except Exception as e:
-            LOG.error("AI 调用失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
-            if gen < GEN_RETRIES:
-                time.sleep(BACKOFF_BASE)
-                continue
-            raise SystemExit("AI call failed after retries")
-        report = _extract_json(content)
-        if report is None:
-            LOG.error("AI 返回无法解析为 JSON（第 %d/%d 次生成），完整内容(%d字)：\n%s",
-                      gen, GEN_RETRIES, len(content), content[:1500])
-            if gen < GEN_RETRIES:
-                time.sleep(BACKOFF_BASE)
-                continue
-            raise SystemExit("invalid AI json")
-        try:
-            _validate(report)
-        except AssertionError as e:
-            LOG.error("结构校验失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
-            if gen < GEN_RETRIES:
-                time.sleep(BACKOFF_BASE)
-                continue
-            raise SystemExit("invalid report structure")
-        total = sum(len(report.get("modules", {}).get(k, [])) for k in
+    try:
+        content = None
+        for gen in range(1, GEN_RETRIES + 1):
+            try:
+                content = _call_ai(base_url, api_key, model, system_prompt, user_prompt)
+            except Exception as e:
+                LOG.error("AI 调用失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
+                if gen < GEN_RETRIES:
+                    time.sleep(BACKOFF_BASE)
+                    continue
+                raise SystemExit("AI call failed after retries")
+            report = _extract_json(content)
+            if report is None:
+                LOG.error("AI 返回无法解析为 JSON（第 %d/%d 次生成），完整内容(%d字)：\n%s",
+                          gen, GEN_RETRIES, len(content), content[:1500])
+                if gen < GEN_RETRIES:
+                    time.sleep(BACKOFF_BASE)
+                    continue
+                raise SystemExit("invalid AI json")
+            try:
+                _validate(report)
+            except AssertionError as e:
+                LOG.error("结构校验失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
+                if gen < GEN_RETRIES:
+                    time.sleep(BACKOFF_BASE)
+                    continue
+                raise SystemExit("invalid report structure")
+            total = sum(len(report.get("modules", {}).get(k, [])) for k in
+                        ("project_opportunities", "growth_operations", "views_insights"))
+            if total == 0 and len(signals) > 0:
+                LOG.warning("AI 返回 0 条但候选信号有 %d 条（疑似空生成），重生成（%d/%d）",
+                            len(signals), gen, GEN_RETRIES)
+                if gen < GEN_RETRIES:
+                    time.sleep(BACKOFF_BASE)
+                    continue
+                LOG.warning("已达最大生成次数仍为 0 条，接受空日报。")
+            break
+
+        report["date"] = today
+        report["timezone"] = "Asia/Shanghai"
+
+        out_path = os.path.join(DATA_DIR, f"report-{today}.json")
+        C.save_json(out_path, report)
+        total = sum(len(report["modules"].get(k, [])) for k in
                     ("project_opportunities", "growth_operations", "views_insights"))
-        if total == 0 and len(signals) > 0:
-            LOG.warning("AI 返回 0 条但候选信号有 %d 条（疑似空生成），重生成（%d/%d）",
-                        len(signals), gen, GEN_RETRIES)
-            if gen < GEN_RETRIES:
-                time.sleep(BACKOFF_BASE)
-                continue
-            LOG.warning("已达最大生成次数仍为 0 条，接受空日报。")
-        break
-
-    report["date"] = today
-    report["timezone"] = "Asia/Shanghai"
-
-    out_path = os.path.join(DATA_DIR, f"report-{today}.json")
-    C.save_json(out_path, report)
-    total = sum(len(report["modules"].get(k, [])) for k in
-                ("project_opportunities", "growth_operations", "views_insights"))
-    LOG.info("日报已生成：3 个模块共 %d 条，写入 %s", total, out_path)
+        LOG.info("日报已生成：3 个模块共 %d 条，写入 %s", total, out_path)
+    except SystemExit as e:
+        LOG.warning("⚠️ AI 生成失败（%s），降级为「今日信号速览」以保证每天有内容。", e)
+        report = _degraded_report(today, raw_signals)
+        out_path = os.path.join(DATA_DIR, f"report-{today}.json")
+        C.save_json(out_path, report)
+        total = sum(len(report["modules"].get(k, [])) for k in
+                    ("project_opportunities", "growth_operations", "views_insights"))
+        LOG.info("降级日报已生成：共 %d 条信号速览，写入 %s", total, out_path)
 
 
 if __name__ == "__main__":
