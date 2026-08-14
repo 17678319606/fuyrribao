@@ -33,16 +33,19 @@ env:
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   WP_CATEGORY_NAME: 日报
   AI_BASE_URL: https://ai.jinbufenzi.com/v1
+  AI_BASE_URL_POOL: ${{ secrets.AI_BASE_URL_POOL }}
   AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
   AI_MODEL: auto
   AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}
+  AI_REQUEST_TIMEOUT: ${{ secrets.AI_REQUEST_TIMEOUT }}
+  AI_FORCE_NON_STREAM: ${{ secrets.AI_FORCE_NON_STREAM }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' && '1' || '0' }}
 
 jobs:
   daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: 拉取仓库
         uses: actions/checkout@v4
