@@ -1,8 +1,10 @@
 __pycache__/
 *.pyc
-# 运行时产物（候选/报告/快照/状态）不进 git 历史，避免每日提交导致历史膨胀。
-# 这些数据由 workflow 在 runner 本地生成并使用，无需纳入版本控制。
+# 运行时产物隔离说明：
+# - data/：采集候选/报告/快照等，由 workflow 在 runner 本地生成并使用，体积较大且每日变化，不进 git 历史。
+# - state/source_status.json、state/last_posted.json：临时诊断/运行记录，不持久化。
+# - 以下文件【必须提交】，否则跨天去重与增量基线丢失：
+#   state/seen.json（跨天去重表）、state/cid_readme_snapshot.txt（CID 增量基线）、state/heartbeat.txt（心跳防 60 天停用）。
 data/
 state/source_status.json
-state/cid_readme_snapshot.txt
-state/seen.json
+state/last_posted.json
