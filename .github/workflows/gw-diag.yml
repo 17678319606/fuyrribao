@@ -1,0 +1,108 @@
+# 网关诊断（只读，不发布）：枚举 ai.jinbufenzi.com 可用模型，并探测每个模型流式返回结构
+# 目的：找到能稳定返回 delta.content（非 reasoning-only）、且遵循 JSON schema 的非推理模型，
+#       以便把 AI_FALLBACK_MODEL 从 auto 改成一个确定的非推理模型，修复当前 524/空流/缺模块问题。
+name: 网关诊断-gw-diag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
+  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 诊断网关模型与流式结构
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, urllib.error
+
+          KEY = os.environ["AI_FALLBACK_KEY"]
+          BASE = os.environ.get("AI_FALLBACK_URL", "https://ai.jinbufenzi.com/v1").rstrip("/")
+          HEAD = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json",
+                  "Accept": "application/json"}
+
+          def post(payload, timeout=60):
+              req = urllib.request.Request(f"{BASE}/chat/completions",
+                                           data=json.dumps(payload).encode(), headers=HEAD, method="POST")
+              with urllib.request.urlopen(req, timeout=timeout) as r:
+                  return r
+
+          # 1) 列出可用模型
+          print("=== GET /models ===")
+          model_ids = []
+          try:
+              req = urllib.request.Request(f"{BASE}/models", headers=HEAD)
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  d = json.loads(r.read())
+              model_ids = [m.get("id") for m in d.get("data", [])]
+              print("MODEL_COUNT=%d" % len(model_ids))
+              for i in model_ids:
+                  print("MODEL:", i)
+          except Exception as e:
+              print("LIST_MODELS_ERROR:", repr(e))
+
+          # 2) 探测流式结构：是否返回 content / reasoning，以及 content 是否可解析为含模块的 JSON
+          def probe(mid, extra=None, label=""):
+              print(f"\n--- PROBE model={mid} {label} ---")
+              payload = {
+                  "model": mid,
+                  "messages": [{"role": "user", "content":
+                      '只返回 JSON：{"modules":{"project_opportunities":[],"growth_operations":[],"views_insights":[]},"daily_summary":{"methodology":"x","evidence":[]}}'}],
+                  "stream": True,
+                  "max_tokens": 300,
+                  "temperature": 0.2,
+              }
+              if extra:
+                  payload.update(extra)
+              try:
+                  has_content = False
+                  has_reasoning = False
+                  n = 0
+                  buf = ""
+                  with post(payload) as r:
+                      for raw in r:
+                          line = raw.decode("utf-8", "replace").strip()
+                          if not line.startswith("data:"):
+                              continue
+                          data = line[5:].strip()
+                          if data == "[DONE]":
+                              break
+                          try:
+                              obj = json.loads(data)
+                          except Exception:
+                              continue
+                          ch = ((obj.get("choices") or [{}])[0].get("delta") or {})
+                          if ch.get("content"):
+                              has_content = True
+                              buf += ch["content"]
+                          if ch.get("reasoning") or ch.get("reasoning_content"):
+                              has_reasoning = True
+                          n += 1
+                  # 简单 JSON 模块检测
+                  has_modules = ('"growth_operations"' in buf) or ('growth_operations' in buf)
+                  print(f"  chunks={n} has_content={has_content} has_reasoning={has_reasoning} has_growth_ops={has_modules}")
+                  print(f"  content_head={buf[:160]!r}")
+              except urllib.error.HTTPError as e:
+                  print("  HTTP", e.code, e.read().decode()[:200])
+              except Exception as e:
+                  print("  ERR", repr(e))
+
+          # 当前默认（auto）
+          probe("auto", label="(current default)")
+
+          # 对前 8 个可用模型各探一次
+          for mid in model_ids[:8]:
+              probe(mid)
+
+          # 试把推理关掉的几种常见参数（在默认模型上）
+          probe("auto", extra={"chat_template_kwargs": {"enable_thinking": False}}, label="(disable_thinking vLLM)")
+          probe("auto", extra={"reasoning": {"enabled": False}}, label="(reasoning.enabled=false)")
+          probe("auto", extra={"think": False}, label="(think=false)")
+          PY
