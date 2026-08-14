@@ -1,6 +1,5 @@
 # 网关诊断（只读，不发布）：枚举 ai.jinbufenzi.com 可用模型，并探测每个模型流式返回结构
-# 目的：找到能稳定返回 delta.content（非 reasoning-only）、且遵循 JSON schema 的非推理模型，
-#       以便把 AI_FALLBACK_MODEL 从 auto 改成一个确定的非推理模型，修复当前 524/空流/缺模块问题。
+# 复用生产代码的 DoH 钉 IP 逻辑（仅 jinbufenzi host），否则海外 Runner 直连该域名会 Network unreachable。
 name: 网关诊断-gw-diag
 
 on:
@@ -21,14 +20,61 @@ jobs:
       - name: 诊断网关模型与流式结构
         run: |
           python - <<'PY'
-          import os, json, urllib.request, urllib.error
+          import os, json, socket, urllib.request, urllib.error, urllib.parse, time
 
           KEY = os.environ["AI_FALLBACK_KEY"]
           BASE = os.environ.get("AI_FALLBACK_URL", "https://ai.jinbufenzi.com/v1").rstrip("/")
           HEAD = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json",
                   "Accept": "application/json"}
 
-          def post(payload, timeout=60):
+          # —— 复用生产 DoH 钉 IP 逻辑（仅 jinbufenzi）——
+          def doh_resolve(host):
+              import email.utils as eu
+              providers = [
+                  ("Google", "https://dns.google/resolve?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+                  ("Cloudflare", "https://cloudflare-dns.com/dns-query?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+              ]
+              ips = []
+              for name, url, hdr in providers:
+                  try:
+                      req = urllib.request.Request(url, headers=hdr)
+                      with urllib.request.urlopen(req, timeout=10) as r:
+                          d = json.loads(r.read())
+                      found = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
+                      if found:
+                          print("DoH(%s) %s -> %s" % (name, host, found))
+                          ips.extend(found)
+                  except Exception as e:
+                      print("DoH(%s) %s 失败: %s" % (name, host, e))
+              seen, uniq = set(), []
+              for ip in ips:
+                  if ip not in seen:
+                      seen.add(ip); uniq.append(ip)
+              return uniq
+
+          _patched_hosts = {}
+          def install_dns_patch(host):
+              if host in _patched_hosts:
+                  return
+              ips = doh_resolve(host)
+              if not ips:
+                  print("DoH 无结果，放弃钉 IP，走正常 DNS")
+                  return
+              target = ips[0]
+              orig = socket.getaddrinfo
+              def patched(h, *args, **kwargs):
+                  if h == host:
+                      port = args[0] if args and isinstance(args[0], int) else 443
+                      return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (target, port))]
+                  return orig(h, *args, **kwargs)
+              socket.getaddrinfo = patched
+              _patched_hosts[host] = target
+              print("DNS 钉 IP: %s -> %s" % (host, target))
+
+          gw_host = urllib.parse.urlparse(BASE).netloc
+          install_dns_patch(gw_host)
+
+          def chat(payload, timeout=60):
               req = urllib.request.Request(f"{BASE}/chat/completions",
                                            data=json.dumps(payload).encode(), headers=HEAD, method="POST")
               with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -48,7 +94,7 @@ jobs:
           except Exception as e:
               print("LIST_MODELS_ERROR:", repr(e))
 
-          # 2) 探测流式结构：是否返回 content / reasoning，以及 content 是否可解析为含模块的 JSON
+          # 2) 探测流式结构
           def probe(mid, extra=None, label=""):
               print(f"\n--- PROBE model={mid} {label} ---")
               payload = {
@@ -66,7 +112,7 @@ jobs:
                   has_reasoning = False
                   n = 0
                   buf = ""
-                  with post(payload) as r:
+                  with chat(payload) as r:
                       for raw in r:
                           line = raw.decode("utf-8", "replace").strip()
                           if not line.startswith("data:"):
@@ -80,13 +126,11 @@ jobs:
                               continue
                           ch = ((obj.get("choices") or [{}])[0].get("delta") or {})
                           if ch.get("content"):
-                              has_content = True
-                              buf += ch["content"]
+                              has_content = True; buf += ch["content"]
                           if ch.get("reasoning") or ch.get("reasoning_content"):
                               has_reasoning = True
                           n += 1
-                  # 简单 JSON 模块检测
-                  has_modules = ('"growth_operations"' in buf) or ('growth_operations' in buf)
+                  has_modules = ("growth_operations" in buf)
                   print(f"  chunks={n} has_content={has_content} has_reasoning={has_reasoning} has_growth_ops={has_modules}")
                   print(f"  content_head={buf[:160]!r}")
               except urllib.error.HTTPError as e:
@@ -94,14 +138,9 @@ jobs:
               except Exception as e:
                   print("  ERR", repr(e))
 
-          # 当前默认（auto）
           probe("auto", label="(current default)")
-
-          # 对前 8 个可用模型各探一次
           for mid in model_ids[:8]:
               probe(mid)
-
-          # 试把推理关掉的几种常见参数（在默认模型上）
           probe("auto", extra={"chat_template_kwargs": {"enable_thinking": False}}, label="(disable_thinking vLLM)")
           probe("auto", extra={"reasoning": {"enabled": False}}, label="(reasoning.enabled=false)")
           probe("auto", extra={"think": False}, label="(think=false)")
