@@ -757,7 +757,7 @@ def main():
     # AI 配置与候选端点
     base_urls = _parse_base_urls()
     api_key = os.environ.get("AI_API_KEY", "")
-    model = os.environ.get("AI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("AI_MODEL", "gemini-2.5-flash-latest")
     if _force_non_stream():
         LOG.info("强制非流式模式：所有 AI 调用使用整包返回（可在 Secret AI_FORCE_NON_STREAM=0 关闭）")
 
