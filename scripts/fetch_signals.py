@@ -36,7 +36,7 @@ def parse_rss(url, name):
     import feedparser
     d = feedparser.parse(url)
     out = []
-    for e in d.entries[:30]:
+    for e in d.entries[:100]:
         link = e.get("link") or e.get("id") or ""
         if not link:
             continue
@@ -193,20 +193,25 @@ def main():
     LOG.info("开始采集，源数量=%d，冷启动=%s", len(sources), cold)
 
     candidates = []
+    src_status = {}  # 源可用性状态：供后续告警/巡检使用
     for cfg in sources:
+        sid = cfg.get("id")
         stype = cfg.get("type")
         parser = PARSERS.get(stype)
         if not parser:
             LOG.warning("未知源类型 %s，跳过: %s", stype, cfg.get("id"))
+            src_status[sid] = {"ok": False, "reason": "unknown_type", "got": 0, "fresh": 0}
             continue
         try:
             items = parser(cfg) if stype == "github_readme_diff" else parser(cfg["url"], cfg["name"])
         except Exception as e:
             LOG.warning("源 %s 抓取失败: %s", cfg.get("id"), e)
+            src_status[sid] = {"ok": False, "reason": "fetch_error", "got": 0, "fresh": 0}
             continue
         # 去重（按 id）
         fresh = [it for it in items if it.get("id") and it["id"] not in seen]
         LOG.info("源 %s: 抓到 %d，新增 %d", cfg.get("id"), len(items), len(fresh))
+        src_status[sid] = {"ok": True, "reason": "", "got": len(items), "fresh": len(fresh)}
         # 每个源限流，保证多样性并控制 AI 上下文长度
         fresh = fresh[: C.MAX_PER_SOURCE]
         candidates.extend(fresh)
@@ -225,6 +230,16 @@ def main():
     for it in candidates:
         seen[it["id"]] = C.beijing_now().isoformat()
     C.save_seen(seen)
+
+    # 记录源可用性状态（供巡检/告警使用）
+    try:
+        C.save_json(os.path.join(C.STATE_DIR, "source_status.json"),
+                    {"date": today, "status": src_status})
+        failed = [k for k, v in src_status.items() if not v["ok"]]
+        if failed:
+            LOG.warning("⚠️ 今日有 %d 个源抓取失败: %s", len(failed), failed)
+    except Exception as e:
+        LOG.warning("写源状态失败（不影响主流程）: %s", e)
 
     # 清理
     cleanup()
