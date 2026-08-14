@@ -436,6 +436,13 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                 {"role": "user", "content": user_prompt},
             ],
         }
+        # 国内网关 ai.jinbufenzi.com 默认模型为 qwen3.6-35b-a3b（推理模型）：
+        # 复杂/长 prompt 会进入 thinking 阶段，慢且易被 EdgeOne 源站超时（524）截断，
+        # 导致流式只收到 reasoning、content 为空 → 整批失败。关闭 thinking 可显著缩短生成、
+        # 规避 524/空流，且 Qwen3 关闭思考后结构化输出仍正常。仅对 jinbufenzi 网关加此参数，
+        # 避免误发给其他 OpenAI 兼容端点导致 400。
+        if "jinbufenzi" in _host:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         for ci, proxy in enumerate(cands):
             proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -593,6 +600,13 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     {"role": "user", "content": user_prompt},
                 ],
             }
+            # 与流式一致：jinbufenzi 网关关闭 thinking，避免整包生成被 524 截断
+            try:
+                _nb_host = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(base_url).netloc
+            except Exception:
+                _nb_host = ""
+            if "jinbufenzi" in _nb_host:
+                nb_payload["chat_template_kwargs"] = {"enable_thinking": False}
             try:
                 r2 = requests.post(url, headers=headers, json=nb_payload,
                                    proxies=None, timeout=timeout)
