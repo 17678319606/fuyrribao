@@ -79,30 +79,54 @@ def parse_reddit_json(url, name):
 
 
 def parse_html_zhongnianren(url, name):
+    """中年指南：优先走自描述 RSS；否则回退抓取站内文章链接。
+    放宽链接匹配（/posts/、/post/、/articles/、/p/ 等），并改用 <a> 自身文本作标题，
+    提升在不同页面结构下的抓取覆盖率与健壮性。"""
     from bs4 import BeautifulSoup
     r = _http_get(url)
     soup = BeautifulSoup(r.text, "lxml")
+    base = url.rstrip("/")
+    # 1) 自描述 RSS / Atom
+    for lk in soup.find_all("link", rel="alternate"):
+        t = (lk.get("type") or "").lower()
+        if "rss" in t or "atom" in t:
+            href = lk.get("href") or ""
+            if href:
+                feed = href if href.startswith("http") else base + href
+                try:
+                    return parse_rss(feed, name)
+                except Exception as e:
+                    LOG.warning("中年指南 RSS 解析失败，回退 HTML: %s", e)
+            break
+    # 2) 回退：站内文章链接
     out = []
-    for a in soup.find_all("a", href=re.compile(r"^/posts/")):
+    seen = set()
+    for a in soup.find_all("a", href=True):
         href = a["href"]
-        source_url = url.rstrip("/") + href
-        container = a.find_parent(["li", "article", "div", "section"]) or a.parent
-        text = container.get_text(" ", strip=True) if container else a.get_text(" ", strip=True)
-        if not text:
+        if not re.search(r"/(posts?|articles?|p)/", href):
             continue
-        # 发布时间：同容器内带 ISO 时间戳的 title 属性
+        full = href if href.startswith("http") else base + href
+        if full in seen or not full.startswith("http"):
+            continue
+        seen.add(full)
+        text = a.get_text(" ", strip=True)
+        if not text or len(text) < 4:
+            continue
         pub = _now_iso()
-        for el in (container.find_all(True) if container else [a]):
-            t = el.get("title", "")
-            m = ISO_RE.search(t)
-            if m:
-                pub = m.group(0) + ("" if "Z" in t or "+" in t else "")
-                break
+        # 就近时间戳：父容器内第一个带时间属性
+        container = a.find_parent(["li", "article", "div", "section"]) or a.parent
+        if container:
+            for el in container.find_all(True):
+                t = el.get("datetime") or el.get("title") or ""
+                m = ISO_RE.search(t)
+                if m:
+                    pub = m.group(0)
+                    break
         out.append({
-            "id": source_url,
+            "id": full,
             "source_name": name,
-            "source_url": source_url,
-            "title": text[:120],
+            "source_url": full,
+            "title": text[:160],
             "content": text,
             "published_at": pub,
         })
@@ -134,7 +158,7 @@ def parse_github_readme_diff(cfg):
     new_lines = [l.strip() for l in cur.splitlines()
                  if l.strip() and l.strip() not in old_lines and "http" in l]
     out = []
-    for line in new_lines[:40]:
+    for line in new_lines[:80]:
         m = re.search(r"https?://[^\s\)\]]+", line)
         link = m.group(0) if m else cfg.get("anchor", url)
         # 名称：取第一个 markdown 链接文字或行首文字
