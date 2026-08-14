@@ -42,7 +42,7 @@ env:
 jobs:
   daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: 拉取仓库
         uses: actions/checkout@v4
@@ -109,8 +109,8 @@ jobs:
               break
             fi
             if [ "$i" -lt "$MAX_TRIES" ]; then
-              echo "⚠️ 第 $i 轮失败（疑似网络抖动/源站超时），60s 后自愈重试…"
-              sleep 60
+              echo "⚠️ 第 $i 轮失败（疑似网络抖动/源站超时），90s 后自愈重试…"
+              sleep 90
             else
               STEP_END=$(date +%s)
               echo "❌ 已重试 $MAX_TRIES 次仍失败，本步骤总耗时 $((STEP_END - STEP_START))s"
