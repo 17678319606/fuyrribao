@@ -38,9 +38,9 @@ MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生�
 
 # —— 分批筛选（避免大量候选被直接截断丢弃，提升内容丰富度）——
 SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
-SCREEN_BATCH = 45         # 每批送入筛选的候选数
+SCREEN_BATCH = 60         # 每批送入筛选的候选数（平衡单批覆盖度与调用次数）
 SCREEN_KEEP_PER_BATCH = 12  # 每批最多保留的精华条数（仅作日志参考，实际取汇总 TopN）
-SCREEN_FINAL_CAP = 90     # 筛选后送入最终生成的最大条数（安全上限，防个别源爆量撑爆上下文）
+SCREEN_FINAL_CAP = 100    # 筛选后送入最终生成的最大条数（安全上限，防个别源爆量撑爆上下文）
 
 
 def _is_valid_proxy(p):
