@@ -22,6 +22,10 @@ on:
 permissions:
   contents: write               # 仅用于提交心跳 / 去重状态 / 产物回仓库
 
+concurrency:
+  group: fuyrribao-daily
+  cancel-in-progress: false    # 同一时刻只允许一个运行；避免宝塔触发与备用定时并发导致双发
+
 env:
   TZ: Asia/Shanghai
   WP_URL: https://dajiayouxuan.com
@@ -108,6 +112,37 @@ jobs:
             fi
           done
 
+      # ---------- 源抓取失败告警（非致命，仅提醒，避免漏看源异常） ----------
+      - name: 源抓取失败告警（非致命）
+        if: always()
+        run: |
+          python - <<'PY'
+import os, json, urllib.request
+p = "state/source_status.json"
+if not os.path.exists(p):
+    raise SystemExit(0)
+try:
+    d = json.load(open(p, encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+status = d.get("status", {})
+failed = [k for k, v in status.items() if not v.get("ok")]
+if not failed:
+    print("✅ 所有内容源抓取正常")
+    raise SystemExit(0)
+msg = "【副业日报】今日有 %d 个内容源抓取失败：%s\n请检查源可用性（不影响已成功源的日报生成）。" % (
+    len(failed), ", ".join(failed))
+payload = json.dumps({"msgtype": "text", "text": {"content": msg}}).encode("utf-8")
+url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0"
+try:
+    req = urllib.request.Request(url, data=payload,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    urllib.request.urlopen(req, timeout=10)
+    print("已发送源失败告警:", failed)
+except Exception as e:
+    print("源失败告警发送失败:", e)
+PY
+
       # ---------- 心跳提交（防 GitHub 60天停用 + 回写状态/产物） ----------
       # 始终执行（即便上面被跳过），保证每次运行都有 push 活动 → 重置 60 天无活跃计时。
       - name: 心跳提交（防 60天停用 + 回写状态）
@@ -117,8 +152,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # 心跳：每次运行都写入当日时间戳，确保有 commit/push 活动
           echo "$(TZ=Asia/Shanghai date '+%F %T')" > state/heartbeat.txt
-          # 仅提交 state/heartbeat.txt（data/ 为运行时产物，已在 .gitignore 忽略，不进 git 历史）
-          git add state/heartbeat.txt || true
+          # 提交整个 state/（heartbeat.txt + seen.json 去重表 + cid 增量快照均须持久化，
+          # 仅靠 .gitignore 排除临时态 source_status.json / last_posted.json）
+          git add state/ || true
           git diff --cached --quiet || git commit -m "daily: $(TZ=Asia/Shanghai date +%F) [heartbeat]"
           # 推送前先 rebase 远端：规避并行/历史漂移导致的 non-fast-forward
           for j in 1 2 3; do
