@@ -1,20 +1,39 @@
-# 副业日报每日生成流水线
-# 触发：北京时间 18:00（UTC 10:00，主）+ 18:30 备用补发 + 手动触发
-# 流程：采集增量 → AI 结构化 → 发布 WordPress
-# 抗抖动设计：步骤 1-3 合并进单步「自愈重试循环」（网络抖动/源站超时自动重试最多 3 次）；
-#           git push 前先 rebase 远端，避免 non-fast-forward 导致状态回写失败。
-# 密钥全部走 GitHub Secrets，绝不硬编码。
-
+# 副业日报每日生成流水线（混合触发版 v3）
+# ─────────────────────────────────────────────────────────────────────
+# 主触发：用户 1H1G 宝塔服务器 19:00 cron → 调 GitHub Dispatch API（见 trigger_daily.sh）
+# 备触发：GitHub 自带定时 19:40 / 20:10（北京时间）兜底，仅当主触发失败/未跑时补发
+# 防重复：每次运行先用 WP REST 查「今日是否已发布」，已发布则直接跳过（早退，省额度+绝不双发）
+# 防 GitHub 60天停用：每次运行都提交 state/heartbeat.txt，保证仓库每日有 push 活动
+# 失败告警：企业微信机器人（workflow 级 failure 步骤）+ 服务器侧双告警（trigger_daily.sh）
+# 密钥全部走 GitHub Secrets / 环境变量，绝不硬编码敏感信息。
 name: 副业日报每日生成
 
 on:
   schedule:
-    - cron: '0 10 * * *'        # UTC 10:00 = 北京时间 18:00（主生成）
-    - cron: '30 10 * * *'       # UTC 10:30 = 北京时间 18:30（备用补发：主跑失败/持续中断时兜底）
-  workflow_dispatch: {}         # 允许在 Actions 页面手动跑一次
+    - cron: '40 11 * * *'     # UTC 11:40 = 北京时间 19:40（备用补发 1）
+    - cron: '10 12 * * *'     # UTC 12:10 = 北京时间 20:10（备用补发 2）
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '强制更新今日文章（覆盖已发布内容，用于修正排版）'
+        required: false
+        default: 'false'
 
 permissions:
-  contents: write               # 仅用于提交去重状态 / 产物回仓库
+  contents: write               # 仅用于提交心跳 / 去重状态 / 产物回仓库
+
+env:
+  TZ: Asia/Shanghai
+  WP_URL: https://dajiayouxuan.com
+  WP_USER: tougao
+  WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+  WP_CATEGORY_NAME: 日报
+  AI_BASE_URL: https://ai.jinbufenzi.com/v1
+  AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  AI_MODEL: auto
+  AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' && '1' || '0' }}
 
 jobs:
   daily:
@@ -34,22 +53,42 @@ jobs:
       - name: 安装依赖
         run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
 
+      # ---------- 去重早退：今日已发布则跳过（省额度 + 杜绝重复发文） ----------
+      - name: 去重早退检查（今日已发布则跳过）
+        id: preflight
+        run: |
+          python - <<'PY'
+          import os, sys, base64, requests, datetime
+          out = os.environ.get("GITHUB_OUTPUT", "/dev/null")
+          BJ = datetime.timezone(datetime.timedelta(hours=8))
+          today = datetime.datetime.now(BJ).strftime("%Y-%m-%d")
+          force = os.environ.get("FORCE_UPDATE") == "1"
+          try:
+              wp = os.environ["WP_URL"].rstrip("/")
+              auth = {"Authorization": "Basic " + base64.b64encode(
+                  f'{os.environ["WP_USER"]}:{os.environ["WP_APP_PASSWORD"]}'.encode()).decode()}
+              r = requests.get(wp + "/wp-json/wp/v2/posts",
+                               params={"search": today, "status": "publish", "per_page": 20},
+                               headers=auth, timeout=30)
+              r.raise_for_status()
+              for p in r.json():
+                  t = p.get("title", {}).get("rendered", "")
+                  if today in t and "副业日报" in t:
+                      if force:
+                          print("检测到今日文章但 FORCE=1，将继续覆盖更新。")
+                          open(out, "a").write("skip=0\n")
+                          sys.exit(0)
+                      print("今日文章已存在（id=%s），跳过生成以省额度。" % p["id"])
+                      open(out, "a").write("skip=1\n")
+                      sys.exit(0)
+          except Exception as e:
+              print("WP 查询失败，继续生成:", e)
+          open(out, "a").write("skip=0\n")
+          PY
+
       # ---------- 采集 + AI 生成 + 发布：合并为「自愈重试循环」 ----------
-      # 任一环节因网络抖动/源站超时/断流失败时，自动休眠 60s 后重试，最多 3 轮；
-      # 仅当 3 轮全部失败才标记作业失败。脚本内另有端点级/生成级多层重试做兜底。
       - name: 采集 + AI 生成 + 发布（自愈重试，抗抖动/断流）
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 自带，用于读 1c7 仓库 commit diff
-          AI_BASE_URL: https://ai.jinbufenzi.com/v1
-          AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
-          AI_MODEL: auto
-          AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}   # 可选：国内出口代理池
-          WP_URL: https://dajiayouxuan.com
-          WP_USER: tougao
-          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-          WP_CATEGORY_NAME: 日报
-          # 手动触发时强制更新今日已有文章（验证新排版）；cron 时防重复跳过（残缺则自愈覆盖）
-          FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        if: steps.preflight.outputs.skip != '1'
         run: |
           MAX_TRIES=3
           for i in $(seq 1 $MAX_TRIES); do
@@ -69,14 +108,18 @@ jobs:
             fi
           done
 
-      # ---------- 把去重状态 + 产物提交回仓库（rebase 安全推送） ----------
-      - name: 提交状态与产物
+      # ---------- 心跳提交（防 GitHub 60天停用 + 回写状态/产物） ----------
+      # 始终执行（即便上面被跳过），保证每次运行都有 push 活动 → 重置 60 天无活跃计时。
+      - name: 心跳提交（防 60天停用 + 回写状态）
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 心跳：每次运行都写入当日时间戳，确保有 commit/push 活动
+          echo "$(TZ=Asia/Shanghai date '+%F %T')" > state/heartbeat.txt
           git add state/ data/ || true
-          git diff --cached --quiet || git commit -m "daily: $(date +%F) [retry-safe]"
-          # 推送前先 rebase 远端：规避 Actions 并行/历史漂移导致的 non-fast-forward
+          git diff --cached --quiet || git commit -m "daily: $(TZ=Asia/Shanghai date +%F) [heartbeat]"
+          # 推送前先 rebase 远端：规避并行/历史漂移导致的 non-fast-forward
           for j in 1 2 3; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push; then
               echo "✅ 状态已回写仓库"
@@ -85,3 +128,11 @@ jobs:
             echo "git push 第 $j/3 次失败（可能远端已更新），5s 后重试…"
             sleep 5
           done
+
+      # ---------- 失败告警：企业微信机器人（兜底，确保 GitHub 侧也能通知） ----------
+      - name: 失败告警（企业微信机器人）
+        if: failure()
+        run: |
+          curl -s -o /dev/null -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0" \
+            -H "Content-Type: application/json" \
+            -d "{\"msgtype\":\"text\",\"text\":{\"content\":\"【副业日报】GitHub Actions 今日生成失败，请检查。\nrun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}}"
