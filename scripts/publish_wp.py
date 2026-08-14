@@ -18,6 +18,7 @@ v3 排版规范（卡片式 + 清晰层级）：
 import os
 import sys
 import json
+import time
 import html as html_lib
 import base64
 from urllib.parse import urlparse
@@ -291,6 +292,38 @@ def render(report):
     )
 
 
+def _short(url, n=64):
+    return url if len(url) <= n else url[:n] + "…"
+
+
+def _wp_call(session, method, url, auth, json_body=None, timeout=90, retries=2, backoff=5):
+    """WP REST 调用包装：偶发超时/连接抖动/429/5xx 自动重试，退避线性增长。
+    慢文章发布（大 HTML）给 90s 超时；绝不因瞬时抖动导致当天发布失败。"""
+    import requests
+    last_err = None
+    for i in range(1, retries + 1):
+        try:
+            kw = {"headers": auth, "timeout": timeout}
+            if json_body is not None:
+                kw["json"] = json_body
+            r = session.request(method, url, **kw)
+            if r.status_code in (429, 500, 502, 503, 504):
+                wait = backoff * i
+                LOG.warning("WP %s %s 返回 %s，%ds 后重试", method, _short(url), r.status_code, wait)
+                time.sleep(wait)
+                last_err = RuntimeError("wp status %s" % r.status_code)
+                continue
+            r.raise_for_status()
+            return r
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_err = e
+            wait = backoff * i
+            LOG.warning("WP %s 连接失败(%s)，%ds 后重试", method, type(e).__name__, wait)
+            if i < retries:
+                time.sleep(wait)
+    raise last_err or RuntimeError("wp call failed: " + url)
+
+
 def get_category_id(session, base, auth, name):
     import requests
     r = session.get(base + "/wp-json/wp/v2/categories", params={"search": name},
@@ -386,8 +419,8 @@ def main():
         payload = {"title": title, "content": content, "status": "publish"}
         if cat_id:
             payload["categories"] = [cat_id]
-        r = session.post(f"{base}/wp-json/wp/v2/posts/{existing_id}",
-                         json=payload, headers=auth, timeout=60)
+        r = _wp_call(session, "POST", f"{base}/wp-json/wp/v2/posts/{existing_id}",
+                     auth, json_body=payload, timeout=90)
         r.raise_for_status()
         link = r.json().get("link", "")
         LOG.info("已更新: %s", link)
@@ -404,7 +437,8 @@ def main():
     payload = {"title": title, "content": content, "status": "publish"}
     if cat_id:
         payload["categories"] = [cat_id]
-    r = session.post(base + "/wp-json/wp/v2/posts", json=payload, headers=auth, timeout=60)
+    r = _wp_call(session, "POST", base + "/wp-json/wp/v2/posts",
+                 auth, json_body=payload, timeout=90)
     r.raise_for_status()
     link = r.json().get("link", "")
     LOG.info("已发布: %s", link)
