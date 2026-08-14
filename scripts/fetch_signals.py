@@ -260,7 +260,8 @@ def main():
     sources = C.load_json(C.SOURCES_FILE, [])
     seen = C.load_seen()
     cold = len(seen) == 0
-    LOG.info("开始采集，源数量=%d，冷启动=%s", len(sources), cold)
+    today = C.date_str()
+    LOG.info("开始采集，源数量=%d，冷启动=%s，今日=%s", len(sources), cold, today)
 
     candidates = []
     src_status = {}  # 源可用性状态：供后续告警/巡检使用
@@ -278,8 +279,17 @@ def main():
             LOG.warning("源 %s 抓取失败: %s", cfg.get("id"), e)
             src_status[sid] = {"ok": False, "reason": "fetch_error", "got": 0, "fresh": 0}
             continue
-        # 去重（按 id）
-        fresh = [it for it in items if it.get("id") and it["id"] not in seen]
+        # 去重（按 id）：仅屏蔽「既往日」已见过的信号，允许同日重跑重新采集。
+        # 这样「移到回收站后重跑 / 同日多次执行」都能重新产出候选，再由 publish 覆盖更新。
+        fresh = []
+        for it in items:
+            sid = it.get("id")
+            if not sid:
+                continue
+            last = seen.get(sid)
+            if last and last[:10] < today:   # 仅既往日屏蔽；同日放行，支持重跑刷新
+                continue
+            fresh.append(it)
         LOG.info("源 %s: 抓到 %d，新增 %d", cfg.get("id"), len(items), len(fresh))
         src_status[sid] = {"ok": True, "reason": "", "got": len(items), "fresh": len(fresh)}
         # 每个源限流，保证多样性并控制 AI 上下文长度
@@ -311,7 +321,6 @@ def main():
         LOG.info("候选 %d 条超限，均衡采样至 %d 条（保多样性 + 控额度）", orig, len(candidates))
 
     # 写入今日候选
-    today = C.date_str()
     cand_path = os.path.join(C.DATA_DIR, f"candidates-{today}.json")
     C.save_json(cand_path, candidates)
     LOG.info("候选总数=%d，写入 %s", len(candidates), cand_path)
