@@ -33,7 +33,7 @@ RETRY_PER_ENDPOINT = 4      # 每个候选端点（直连 / 代理）的最大�
 BACKOFF_BASE = 3            # 退避基数（秒），呈指数增长：3 / 6 / 12 / 24s
 REQ_TIMEOUT = (15, 180)     # (connect, read)；read 180s 足够容纳流式长生成，且不超过 job 超时
 GEN_RETRIES = 3             # main() 外层生成级重试：应对空生成 / 解析失败 / 结构不完整
-MAX_INPUT_SIGNALS = 40      # 送入 AI 的候选上限（控制输入上下文，给源站减负）
+MAX_INPUT_SIGNALS = 80      # 送入 AI 的候选上限（控制输入上下文，给源站减负）
 MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生成耗时，避免 Cloudflare 524）
 
 
@@ -366,9 +366,29 @@ def main():
     else:
         signals = candidates.get("candidates") or candidates.get("items") or []
     if len(signals) > MAX_INPUT_SIGNALS:
-        signals = signals[:MAX_INPUT_SIGNALS]
-        LOG.info("候选 %d 条过多，截断至 %d 条送入 AI（保内容量同时给源站减负）",
-                 len(candidates) if isinstance(candidates, list) else len(signals), MAX_INPUT_SIGNALS)
+        # 均衡采样：按来源分组后每个源均匀取 ceil(上限/源数) 条，
+        # 保证每个内容源都有代表进入 AI，避免「前源霸占、后源永远进不了 AI」。
+        from collections import OrderedDict
+        groups = OrderedDict()
+        for s in signals:
+            groups.setdefault(s.get("source_name", "未知"), []).append(s)
+        n_src = len(groups) or 1
+        per = max(1, -(-MAX_INPUT_SIGNALS // n_src))  # ceil
+        picked, leftover = [], []
+        for name, items in groups.items():
+            if len(items) > per:
+                picked.extend(items[:per])
+                leftover.extend(items[per:])
+            else:
+                picked.extend(items)
+        # 若均衡后仍不足上限（某源内容少），用剩余补足，优先补齐未达 per 的源
+        if len(picked) < MAX_INPUT_SIGNALS and leftover:
+            leftover.sort(key=lambda x: x.get("source_name", ""))
+            picked.extend(leftover[: MAX_INPUT_SIGNALS - len(picked)])
+        signals = picked[:MAX_INPUT_SIGNALS]
+        LOG.info("候选 %d 条，按 %d 个源均衡采样至 %d 条送入 AI（每源约 %d 条）",
+                 len(candidates) if isinstance(candidates, list) else len(signals) + len(leftover),
+                 n_src, len(signals), per)
     LOG.info("读取到 %d 条候选信号", len(signals))
 
     if not signals:
