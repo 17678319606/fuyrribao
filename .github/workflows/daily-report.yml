@@ -94,23 +94,26 @@ jobs:
           PY
 
       # ---------- 采集 + AI 生成 + 发布：合并为「自愈重试循环」 ----------
-      - name: 采集 + AI 生成 + 发布（自愈重试，抗抖动/断流）
+      - name: 采集 + AI 生成 + 发布（高延迟 AI 收敛重试）
         if: steps.preflight.outputs.skip != '1'
         run: |
-          MAX_TRIES=3
+          STEP_START=$(date +%s)
+          MAX_TRIES=2
           for i in $(seq 1 $MAX_TRIES); do
             echo "===== 第 $i/$MAX_TRIES 轮尝试（采集→AI→发布） ====="
             if python scripts/fetch_signals.py \
                && python scripts/generate_report.py \
                && python scripts/publish_wp.py; then
-              echo "✅ 第 $i 轮成功完成日报生成与发布"
+              STEP_END=$(date +%s)
+              echo "✅ 第 $i 轮成功完成日报生成与发布，本步骤耗时 $((STEP_END - STEP_START))s"
               break
             fi
             if [ "$i" -lt "$MAX_TRIES" ]; then
               echo "⚠️ 第 $i 轮失败（疑似网络抖动/源站超时），60s 后自愈重试…"
               sleep 60
             else
-              echo "❌ 已重试 $MAX_TRIES 次仍失败，标记作业失败"
+              STEP_END=$(date +%s)
+              echo "❌ 已重试 $MAX_TRIES 次仍失败，本步骤总耗时 $((STEP_END - STEP_START))s"
               exit 1
             fi
           done
