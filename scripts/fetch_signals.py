@@ -175,11 +175,56 @@ def parse_github_readme_diff(cfg):
     return out
 
 
+def parse_github_trending(url, name):
+    """抓取 GitHub Trending 榜单（每日），提炼当天热门仓库作为副业/独立开发灵感源。"""
+    from bs4 import BeautifulSoup
+    try:
+        r = _http_get(url)
+    except Exception as e:
+        LOG.warning("github_trending 抓取失败 %s: %s", name, e)
+        return []
+    soup = BeautifulSoup(r.text, "lxml")
+    out = []
+    for art in soup.select("article.Box-row"):
+        h2 = art.find("h2", class_=re.compile("lh-condensed"))
+        a = h2.find("a") if h2 else None
+        if not a:
+            continue
+        repo_path = (a.get("href") or "").strip()
+        if not repo_path:
+            continue
+        repo_path = repo_path.strip("/")
+        source_url = "https://github.com/" + repo_path
+        p = art.find("p")
+        desc = p.get_text(" ", strip=True) if p else ""
+        lang_el = art.find("span", attrs={"itemprop": "programmingLanguage"})
+        lang = lang_el.get_text(strip=True) if lang_el else ""
+        stars = ""
+        span = art.find("span", class_=re.compile("float-sm-right"))
+        if span:
+            stars = span.get_text(" ", strip=True)
+        repo_title = repo_path.replace("/", " / ")
+        content = (repo_title + "\n"
+                   + (("语言: " + lang + "\n") if lang else "")
+                   + ((stars + "\n") if stars else "")
+                   + desc)
+        out.append({
+            "id": source_url,
+            "source_name": name,
+            "source_url": source_url,
+            "title": repo_title + ((" — " + desc[:60]) if desc else ""),
+            "content": content,
+            "published_at": _now_iso(),
+        })
+    return out
+
+
 PARSERS = {
     "rss": parse_rss,
     "reddit_json": parse_reddit_json,
     "html_zhongnianren": parse_html_zhongnianren,
     "github_readme_diff": parse_github_readme_diff,
+    "github_trending": parse_github_trending,
 }
 
 
