@@ -117,31 +117,31 @@ jobs:
         if: always()
         run: |
           python - <<'PY'
-import os, json, urllib.request
-p = "state/source_status.json"
-if not os.path.exists(p):
-    raise SystemExit(0)
-try:
-    d = json.load(open(p, encoding="utf-8"))
-except Exception:
-    raise SystemExit(0)
-status = d.get("status", {})
-failed = [k for k, v in status.items() if not v.get("ok")]
-if not failed:
-    print("✅ 所有内容源抓取正常")
-    raise SystemExit(0)
-msg = "【副业日报】今日有 %d 个内容源抓取失败：%s\n请检查源可用性（不影响已成功源的日报生成）。" % (
-    len(failed), ", ".join(failed))
-payload = json.dumps({"msgtype": "text", "text": {"content": msg}}).encode("utf-8")
-url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0"
-try:
-    req = urllib.request.Request(url, data=payload,
-                                 headers={"Content-Type": "application/json"}, method="POST")
-    urllib.request.urlopen(req, timeout=10)
-    print("已发送源失败告警:", failed)
-except Exception as e:
-    print("源失败告警发送失败:", e)
-PY
+          import os, json, urllib.request
+          p = "state/source_status.json"
+          if not os.path.exists(p):
+              raise SystemExit(0)
+          try:
+              d = json.load(open(p, encoding="utf-8"))
+          except Exception:
+              raise SystemExit(0)
+          status = d.get("status", {})
+          failed = [k for k, v in status.items() if not v.get("ok")]
+          if not failed:
+              print("✅ 所有内容源抓取正常")
+              raise SystemExit(0)
+          msg = "【副业日报】今日有 %d 个内容源抓取失败：%s\n请检查源可用性（不影响已成功源的日报生成）。" % (
+              len(failed), ", ".join(failed))
+          payload = json.dumps({"msgtype": "text", "text": {"content": msg}}).encode("utf-8")
+          url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0"
+          try:
+              req = urllib.request.Request(url, data=payload,
+                                           headers={"Content-Type": "application/json"}, method="POST")
+              urllib.request.urlopen(req, timeout=10)
+              print("已发送源失败告警:", failed)
+          except Exception as e:
+              print("源失败告警发送失败:", e)
+          PY
 
       # ---------- 心跳提交（防 GitHub 60天停用 + 回写状态/产物） ----------
       # 始终执行（即便上面被跳过），保证每次运行都有 push 活动 → 重置 60 天无活跃计时。
