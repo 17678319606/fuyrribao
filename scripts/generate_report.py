@@ -48,7 +48,9 @@ REQ_TIMEOUT = (20, 300)     # 默认读超时 300s；可被环境变量 AI_REQUE
 GEN_RETRIES = 4             # 外层生成重试 4 次：用户要求必须 AI 输出、可稍晚，多给几次机会
 STREAM_MAX_SECONDS = 900    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
 MAX_INPUT_SIGNALS = 50      # 送入 AI 的候选上限（控制上下文长度保稳定）
-MAX_OUTPUT_TOKENS = 6000    # 输出 token 上限（收敛输出，降低超时/截断概率）
+MAX_OUTPUT_TOKENS = 8000    # 输出 token 上限（收敛输出，降低超时/截断概率；
+                              # 探针实测 35 候选大 prompt 在 6000 处被截断导致 JSON 残缺，
+                              # 提到 8000 留足 3 模块结构余量，流式回传下 524 风险仍可控）
 
 # —— 分批筛选（避免大量候选被直接截断丢弃，提升内容丰富度）——
 SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
@@ -385,6 +387,9 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
     mode = "stream" if stream else "non-stream"
     last_err = None
     timeout = _req_timeout()
+    # enable_thinking 安全网：若网关拒绝 chat_template_kwargs 参数（400），
+    # 置位后本调用内后续尝试去掉该参数重试，避免整端点失效。
+    strip_thinking = False
 
     # 展开为 (url, key, model) 端点列表：首选 base_urls（共用 api_key/model）
     # + 可选兜底（AI_FALLBACK_URL/KEY/MODEL，默认国内网关，独立 key/model）。
@@ -448,12 +453,16 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
             proxies = {"http": proxy, "https": proxy} if proxy else None
             label = f"{base_url} | {proxy or '直连'}"
             for attempt in range(1, RETRY_PER_ENDPOINT + 1):
+                # enable_thinking 安全网：本端点若曾被网关 400 拒绝该参数，则本次去掉后重试
+                payload_now = dict(payload)
+                if strip_thinking:
+                    payload_now.pop("chat_template_kwargs", None)
                 try:
                     LOG.info("AI 请求 [base=%s 端点 %d/%d=%s] 第 %d/%d 次尝试 (%s)",
                              base_url, ci + 1, len(cands), proxy or "直连",
                              attempt, RETRY_PER_ENDPOINT, mode)
                     resp = requests.post(
-                        url, headers=headers, json=payload,
+                        url, headers=headers, json=payload_now,
                         proxies=proxies, timeout=timeout, stream=stream,
                     )
                     resp.raise_for_status()
@@ -554,6 +563,14 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     except Exception:
                         pass
                     last_err = e
+                    # 网关若不支持 chat_template_kwargs（400），去掉该参数重试一次，
+                    # 避免整端点因一个可选参数被拒而失效（其他 OpenAI 兼容端点也可能不支持）。
+                    if status == 400 and "chat_template_kwargs" in payload and not strip_thinking:
+                        strip_thinking = True
+                        LOG.warning("网关拒绝 enable_thinking 参数(400)，重试去掉 chat_template_kwargs：%s",
+                                    body[:160])
+                        time.sleep(BACKOFF_BASE)
+                        continue
                     if _is_retryable_http(status):
                         # 尊重服务端 Retry-After（限流冷却），否则用指数退避
                         wait = _retry_after_seconds(e.response) or (BACKOFF_BASE * (2 ** (attempt - 1)))
@@ -605,7 +622,7 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                 _nb_host = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(base_url).netloc
             except Exception:
                 _nb_host = ""
-            if "jinbufenzi" in _nb_host:
+            if "jinbufenzi" in _nb_host and not strip_thinking:
                 nb_payload["chat_template_kwargs"] = {"enable_thinking": False}
             try:
                 r2 = requests.post(url, headers=headers, json=nb_payload,
