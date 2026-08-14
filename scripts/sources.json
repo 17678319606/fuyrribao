@@ -21,5 +21,10 @@
   { "id": "indiehackers", "type": "rss", "url": "https://www.indiehackers.com/feed.xml", "name": "IndieHackers" },
   { "id": "ruanyifeng", "type": "rss", "url": "https://www.ruanyifeng.com/blog/atom.xml", "name": "阮一峰科技周刊" },
   { "id": "36kr", "type": "rss", "url": "https://36kr.com/feed", "name": "36氪" },
-  { "id": "ifanr", "type": "rss", "url": "https://www.ifanr.com/feed", "name": "爱范儿" }
+  { "id": "ifanr", "type": "rss", "url": "https://www.ifanr.com/feed", "name": "爱范儿" },
+  { "id": "oschina", "type": "rss", "url": "https://www.oschina.net/news/rss", "name": "开源中国" },
+  { "id": "jike_ai", "type": "rss", "url": "https://rsshub.umzzz.com/jike/topic/63579abb6724cc583b9bba9a", "name": "即刻·AI探索站" },
+  { "id": "jike_ai_discuss", "type": "rss", "url": "https://rsshub.umzzz.com/jike/topic/55fadac08cc2e30e00e2e42a", "name": "即刻·人工智能讨论组" },
+  { "id": "jike_engineer", "type": "rss", "url": "https://rsshub.umzzz.com/jike/topic/577c5a122fa95b1100da059f", "name": "即刻·工程师的日常" },
+  { "id": "github_trending_zh", "type": "github_trending", "url": "https://github.com/trending?since=daily&spoken_language_code=zh", "name": "GitHub 中文趋势榜" }
 ]
