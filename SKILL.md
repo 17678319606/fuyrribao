@@ -3,7 +3,7 @@ name: ai-sidehustle-report
 version: 2.0.0
 description: >-
   每日自动从多源（中年指南 / 中文独立开发者 / V2EX / 少数派 / Hacker News / Reddit SideProject /
-  Product Hunt / IndieHackers / 阮一峰科技周刊 / 36氪 / 爱范儿 / 开源中国 / 即刻×3 /
+  Product Hunt / IndieHackers / 阮一峰科技周刊 / 钛媒体 / 爱范儿 / 开源中国 / 即刻×3 /
   GitHub 中文趋势榜 / w2solo / 小众软件×2 / 极客公园，共 20 源）
   采集副业 / 独立开发 / 增长信号，经 AI 结构化分类为「项目机会库 / 增长运营 / 观点心法」
   并产出数据驱动的「每日总结」（含可复用方法论），输出轻量 JSON，供下游发布到 WordPress 日报类目。
