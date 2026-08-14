@@ -35,8 +35,8 @@ env:
   # —— AI 后端：首选 Google Gemini（原生 API，适配 AI Studio 新版 AQ. Auth key）——
   AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
   AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-  # 模型名放 Secret 里（可选）：不设则用默认 gemini-2.5-flash；以后换模型只改 Secrets.AI_MODEL，无需动代码
-  AI_MODEL: ${{ secrets.AI_MODEL || 'gemini-2.5-flash' }}
+  # 模型名放 Secret 里（可选）：不设则用默认 gemini-2.5-flash-latest；以后换模型只改 Secrets.AI_MODEL，无需动代码
+  AI_MODEL: ${{ secrets.AI_MODEL || 'gemini-2.5-flash-latest' }}
   # 可选：同构镜像（共用 GEMINI_API_KEY），分号/逗号/换行分隔
   AI_BASE_URL_POOL: ${{ secrets.AI_BASE_URL_POOL }}
   # 可选兜底：Gemini 全失败时退回国内网关（沿用既有 key + 自有模型）
