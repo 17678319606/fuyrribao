@@ -34,6 +34,7 @@ RETRY_PER_ENDPOINT = 2      # 每端点重试：收敛防时间爆炸；冗余�
 BACKOFF_BASE = 8            # 退避基数 8s：网关高延迟，更长退避让其喘气（用户允许稍晚生成）
 REQ_TIMEOUT = (20, 300)     # 默认读超时 300s；可被环境变量 AI_REQUEST_TIMEOUT 覆盖
 GEN_RETRIES = 4             # 外层生成重试 4 次：用户要求必须 AI 输出、可稍晚，多给几次机会
+STREAM_MAX_SECONDS = 900    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
 MAX_INPUT_SIGNALS = 50      # 送入 AI 的候选上限（控制上下文长度保稳定）
 MAX_OUTPUT_TOKENS = 6000    # 输出 token 上限（收敛输出，降低超时/截断概率）
 
@@ -251,6 +252,8 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
     - 首选即 Google Gemini OpenAI 兼容端点：海外 Runner 直连，规避跨境瓶颈。
     - AI_FORCE_NON_STREAM=1 时强制全部调用走非流式。
     - AI_REQUEST_TIMEOUT 可覆盖默认读超时。
+    - 流式读取自带 STREAM_MAX_SECONDS 整体 wall-clock 上限，避免端点极慢吐数据或
+      SSE 结束标记缺失导致无限挂起（这是 GitHub Runner 8 小时卡死的头号根因）。
     """
     if isinstance(base_urls, str):
         base_urls = [base_urls]
@@ -332,7 +335,13 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     # 流式聚合 SSE（强制 UTF-8 解码，避免中文被误判为 Latin-1 破坏 JSON）
                     content = ""
                     raw_dump = []
+                    stream_deadline = time.time() + STREAM_MAX_SECONDS
+                    last_progress = time.time()
                     for raw_line in resp.iter_lines(decode_unicode=False):
+                        if time.time() > stream_deadline:
+                            LOG.warning("流式读取整体超时（>%ds），强制中断并尝试用已收集内容继续",
+                                        STREAM_MAX_SECONDS)
+                            break
                         if not raw_line:
                             continue
                         try:
@@ -356,6 +365,12 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                         delta = (choices[0].get("delta") or {}).get("content")
                         if delta:
                             content += delta
+                        # 进度日志：每 60s 或每累积 500 字打印一次，方便观察是否还在活
+                        if (time.time() - last_progress > 60 or
+                                (len(content) > 0 and len(content) % 500 < len(delta or ""))):
+                            LOG.info("流式读取中：已收 %d 字，耗时 %.1fs",
+                                     len(content), time.time() - start)
+                            last_progress = time.time()
                     if not content:
                         # 诊断：把原始响应前若干行打出来，便于判断是鉴权错误/Challenge/格式差异
                         snippet = " | ".join(raw_dump[:15])[:800]
@@ -363,12 +378,22 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                         raise RuntimeError("流式响应为空（见上方原始片段）")
                     # 校验 JSON 完整性：流式偶发被网关/CF 截断会导致内容不完整，
                     # 需当作本次尝试失败并退避重试，而非直接返回残缺内容
-                    if _extract_json(content) is None:
+                    extracted = _extract_json(content)
+                    if extracted is None:
+                        # 若已因 wall-clock 超时被中断，内容仍不完整说明端点 SSE 异常，
+                        # 继续在同端点重试只会再浪费 15 分钟，直接放弃该端点/模式。
+                        if time.time() > stream_deadline:
+                            LOG.error("流式读取超时且内容无法解析为 JSON，放弃该端点")
+                            raise RuntimeError("stream wall-clock timeout with invalid JSON")
                         wait = BACKOFF_BASE * (2 ** (attempt - 1))
                         LOG.warning("AI 返回无法解析为 JSON（可能流式被截断），本次尝试失败，%ds 后重试",
                                     wait)
                         time.sleep(wait)
                         continue
+                    # 如果是因为 wall-clock 超时中断的，但能解析出 JSON，也接受为成功
+                    # （避免某些端点不发 [DONE] 但内容已完整的情况被误判为失败）
+                    if time.time() > stream_deadline:
+                        LOG.info("流式读取因整体超时被中断，但内容可解析为 JSON，视为成功")
                     LOG.info("AI 请求成功（base=%s，端点=%s，模式=stream，耗时 %.1fs，约 %d 字）",
                              base_url, proxy or "直连", time.time() - start, len(content))
                     return content
