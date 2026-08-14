@@ -288,26 +288,32 @@ def get_category_id(session, base, auth, name):
 
 
 def find_existing_post(session, base, auth, today):
-    """返回 (文章id, 内容HTML)；无匹配返回 (None, '')。供防重复/强制更新/自愈判断。
+    """返回 (文章id, 内容HTML)；无匹配返回 (None, '')。供覆盖更新/自愈判断。
 
-    去重策略（混合触发防重复核心）：
+    检索策略：
+    - 同时查 publish 与 trash 状态——这样即便文章被误移回收站，
+      重跑也能定位到同一篇并「恢复+覆盖更新」，文章链接(slug)保持不变；
     - 用「今日日期」作为检索词（比整标题稳定；WP 搜索对 '·' 与空格分词不友好，
       整标题检索极易漏匹配，导致"以为没发过又发一篇"）；
-    - 再精确比对标题是否同时含「今日日期」与「副业日报」，避免跨日/内容误命中。
-    - per_page 放大到 20，覆盖历史同名文章。
+    - 再精确比对标题是否含「今日日期」与「副业日报」，避免跨日/内容误命中。
     """
     import requests
-    try:
-        r = session.get(base + "/wp-json/wp/v2/posts",
-                        params={"search": today, "status": "publish", "per_page": 20},
-                        headers=auth, timeout=30)
-        r.raise_for_status()
-    except Exception as e:
-        LOG.warning("查询已存在文章失败：%s", e)
-        return None, ""
-    for p in r.json():
+    found = []
+    for st in ("publish", "trash"):
+        try:
+            r = session.get(base + "/wp-json/wp/v2/posts",
+                            params={"search": today, "status": st, "per_page": 20},
+                            headers=auth, timeout=30)
+            r.raise_for_status()
+            found.extend(r.json())
+        except Exception as e:
+            LOG.warning("查询已存在文章(%s)失败：%s", st, e)
+    for p in found:
         rendered = p.get("title", {}).get("rendered", "")
-        if today in rendered and "副业日报" in rendered:
+        pdate = (p.get("date") or "")[:10]
+        # 双重判定：标题含「今日+副业日报」或「发布日期=今日+副业日报」。
+        # 用 post_date 兜底，避免标题日期格式变化导致漏匹配而重复发文。
+        if "副业日报" in rendered and (today in rendered or pdate == today):
             return p["id"], p.get("content", {}).get("rendered", "")
     return None, ""
 
@@ -350,30 +356,25 @@ def main():
         f"{user}:{app_pw}".encode()).decode(), "Content-Type": "application/json"}
 
     existing_id, existing_html = find_existing_post(session, base, auth, today)
-    force = os.environ.get("FORCE_UPDATE") == "1"
-    # 自愈：若已发布文章残缺/为空（无卡片），即便非强制也覆盖修复
-    broken = bool(existing_id) and ("shr-card" not in existing_html) and ("<article" not in existing_html)
+    # 同日多次执行 → 覆盖更新同一篇文章（保持 slug/URL 不变）；无同日文章则新建。
+    # 永不产生重复文章（始终按 existing_id 更新，而非新建第二篇）。
     if existing_id:
-        if force or broken:
-            reason = "FORCE_UPDATE" if force else "已发布文章残缺，自愈覆盖"
-            LOG.info("检测到今日文章(%s)，%s：用新内容更新。", existing_id, reason)
-            try:
-                cat_id = get_category_id(session, base, auth, cat_name)
-            except Exception as e:
-                LOG.warning("类目解析失败，退回不指定类目: %s", e)
-                cat_id = None
-            payload = {"title": title, "content": content, "status": "publish"}
-            if cat_id:
-                payload["categories"] = [cat_id]
-            r = session.post(f"{base}/wp-json/wp/v2/posts/{existing_id}",
-                             json=payload, headers=auth, timeout=60)
-            r.raise_for_status()
-            link = r.json().get("link", "")
-            LOG.info("已更新: %s", link)
-            print("PUBLISHED_URL=" + link)
-            _record_posted(today, existing_id, link)
-            return
-        LOG.info("今日文章已存在且完整，跳过发布（防重复）。")
+        LOG.info("检测到今日文章(%s)，用新内容覆盖更新（文章链接保持不变）。", existing_id)
+        try:
+            cat_id = get_category_id(session, base, auth, cat_name)
+        except Exception as e:
+            LOG.warning("类目解析失败，退回不指定类目: %s", e)
+            cat_id = None
+        payload = {"title": title, "content": content, "status": "publish"}
+        if cat_id:
+            payload["categories"] = [cat_id]
+        r = session.post(f"{base}/wp-json/wp/v2/posts/{existing_id}",
+                         json=payload, headers=auth, timeout=60)
+        r.raise_for_status()
+        link = r.json().get("link", "")
+        LOG.info("已更新: %s", link)
+        print("PUBLISHED_URL=" + link)
+        _record_posted(today, existing_id, link)
         return
 
     try:
