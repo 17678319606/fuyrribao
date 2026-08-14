@@ -36,6 +36,12 @@ GEN_RETRIES = 3             # main() 外层生成级重试：应对空生成 / �
 MAX_INPUT_SIGNALS = 80      # 送入 AI 的候选上限（控制输入上下文，给源站减负）
 MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生成耗时，避免 Cloudflare 524）
 
+# —— 分批筛选（避免大量候选被直接截断丢弃，提升内容丰富度）——
+SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
+SCREEN_BATCH = 45         # 每批送入筛选的候选数
+SCREEN_KEEP_PER_BATCH = 12  # 每批最多保留的精华条数（仅作日志参考，实际取汇总 TopN）
+SCREEN_FINAL_CAP = 90     # 筛选后送入最终生成的最大条数（安全上限，防个别源爆量撑爆上下文）
+
 
 def _is_valid_proxy(p):
     """校验代理 URL 合法且非占位符（避免中文/字面占位符被当成真实代理）。"""
@@ -353,6 +359,60 @@ def _empty_report(date):
     }
 
 
+def _screen_system_prompt():
+    return (
+        "你是副业/创业领域的内容筛选专家。任务：从一批候选信号中，"
+        "挑出与「副业赚钱、独立开发、创业增长、产品运营、AI 变现、效率工具」"
+        "最相关、信息密度最高、最值得写进今日日报的条目。"
+        "严格宁缺毋滥：广告、纯资讯快讯、低质或重复内容可跳过。"
+        "只输出 JSON：{\"picks\":[{\"id\":\"与输入完全一致的原始 id\","
+        "\"score\":1-10,\"reason\":\"一句话理由\"}]}。"
+    )
+
+
+def _screen_one_batch(batch, base_url, api_key, model, system_prompt):
+    user = (
+        f"以下是 {len(batch)} 条候选信号（JSON 数组，每条含 id/source_name/title/content/published_at）：\n"
+        f"```json\n{json.dumps(batch, ensure_ascii=False, indent=2)}\n```\n"
+        "请按规则筛选，仅返回 picks JSON。"
+    )
+    content = _call_ai(base_url, api_key, model, system_prompt, user)
+    data = _extract_json(content)
+    return (data or {}).get("picks") or []
+
+
+def screen_signals(signals, base_url, api_key, model, system_prompt):
+    """分批筛选：打乱后分桶，每桶让 AI 挑精华，汇总按分数取 TopN。
+    保证每个内容源都有机会被看到，解决『候选被截断丢弃』导致的丰富度下降。"""
+    import random
+    random.shuffle(signals)  # 打乱，使每批源混合，避免整批同源于是漏选
+    batches = [signals[i:i + SCREEN_BATCH] for i in range(0, len(signals), SCREEN_BATCH)]
+    by_id = {s["id"]: s for s in signals if s.get("id")}
+    scored = {}
+    for bi, batch in enumerate(batches):
+        try:
+            picks = _screen_one_batch(batch, base_url, api_key, model, system_prompt)
+        except Exception as e:
+            LOG.warning("分批筛选第 %d/%d 批失败，跳过该批：%s", bi + 1, len(batches), e)
+            continue
+        for p in picks:
+            pid = p.get("id")
+            if pid not in by_id:
+                continue
+            try:
+                sc = int(float(p.get("score", 0) or 0))
+            except Exception:
+                sc = 0
+            prev = scored.get(pid)
+            if prev is None or sc > prev[0]:
+                scored[pid] = (sc, p.get("reason", ""))
+    ranked = sorted(scored.items(), key=lambda kv: kv[1][0], reverse=True)
+    kept = [by_id[pid] for pid, _ in ranked[:SCREEN_FINAL_CAP]]
+    LOG.info("分批筛选完成：%d 候选 → %d 批 → 汇总 %d 条精华 → 取前 %d 条进生成",
+             len(signals), len(batches), len(scored), len(kept))
+    return kept
+
+
 def main():
     C.ensure_dirs()
     today = C.date_str()
@@ -365,38 +425,48 @@ def main():
         signals = candidates
     else:
         signals = candidates.get("candidates") or candidates.get("items") or []
-    if len(signals) > MAX_INPUT_SIGNALS:
-        # 均衡采样：按来源分组后每个源均匀取 ceil(上限/源数) 条，
-        # 保证每个内容源都有代表进入 AI，避免「前源霸占、后源永远进不了 AI」。
-        from collections import OrderedDict
-        groups = OrderedDict()
-        for s in signals:
-            groups.setdefault(s.get("source_name", "未知"), []).append(s)
-        n_src = len(groups) or 1
-        per = max(1, -(-MAX_INPUT_SIGNALS // n_src))  # ceil
-        picked, leftover = [], []
-        for name, items in groups.items():
-            if len(items) > per:
-                picked.extend(items[:per])
-                leftover.extend(items[per:])
-            else:
-                picked.extend(items)
-        # 若均衡后仍不足上限（某源内容少），用剩余补足，优先补齐未达 per 的源
-        if len(picked) < MAX_INPUT_SIGNALS and leftover:
-            leftover.sort(key=lambda x: x.get("source_name", ""))
-            picked.extend(leftover[: MAX_INPUT_SIGNALS - len(picked)])
-        signals = picked[:MAX_INPUT_SIGNALS]
-        LOG.info("候选 %d 条，按 %d 个源均衡采样至 %d 条送入 AI（每源约 %d 条）",
-                 len(candidates) if isinstance(candidates, list) else len(signals) + len(leftover),
-                 n_src, len(signals), per)
-    LOG.info("读取到 %d 条候选信号", len(signals))
+
+    # 提前读取 AI 配置（供分批筛选复用）
+    base_url = os.environ.get("AI_BASE_URL", "https://ai.jinbufenzi.com/v1")
+    api_key = os.environ.get("AI_API_KEY", "")
+    model = os.environ.get("AI_MODEL", "auto")
 
     if not signals:
         LOG.info("今日无候选信号，写空日报并结束。")
         C.save_json(os.path.join(DATA_DIR, f"report-{today}.json"), _empty_report(today))
         return
 
-    # 2) 读取 prompt
+    if not api_key:
+        LOG.error("缺少 AI_API_KEY（Secret AI_SIDEHUSTLE_API_KEY 未注入），无法生成。")
+        raise SystemExit("missing AI key")
+
+    # 2) 候选编排：候选过多 → 分批筛选（AI 分桶挑精华，杜绝截断丢弃）；
+    #    中小批量 → 均衡采样保证每个源都有代表；最后统一安全上限。
+    if len(signals) > SCREEN_THRESHOLD:
+        signals = screen_signals(signals, base_url, api_key, model, _screen_system_prompt())
+    elif len(signals) > MAX_INPUT_SIGNALS:
+        from collections import OrderedDict
+        groups = OrderedDict()
+        for s in signals:
+            groups.setdefault(s.get("source_name", "未知"), []).append(s)
+        n_src = len(groups) or 1
+        per = max(1, -(-MAX_INPUT_SIGNALS // n_src))
+        picked, leftover = [], []
+        for nm, items in groups.items():
+            if len(items) > per:
+                picked.extend(items[:per]); leftover.extend(items[per:])
+            else:
+                picked.extend(items)
+        if len(picked) < MAX_INPUT_SIGNALS and leftover:
+            leftover.sort(key=lambda x: x.get("source_name", ""))
+            picked.extend(leftover[: MAX_INPUT_SIGNALS - len(picked)])
+        signals = picked[:MAX_INPUT_SIGNALS]
+        LOG.info("候选 %d 条，按 %d 个源均衡采样至 %d 条", len(signals), n_src, len(signals))
+    if len(signals) > SCREEN_FINAL_CAP:
+        signals = signals[:SCREEN_FINAL_CAP]
+    LOG.info("最终送入生成：%d 条候选信号", len(signals))
+
+    # 3) 读取 prompt
     try:
         system_prompt = open(SKILL_FILE, "r", encoding="utf-8").read()
     except Exception as e:
@@ -408,15 +478,6 @@ def main():
         f"```json\n{json.dumps(signals, ensure_ascii=False, indent=2)}\n```\n"
         f"请按 SKILL v2 规则，输出 ai-sidehustle-report 日报 JSON。"
     )
-
-    # 3) 调用 AI
-    base_url = os.environ.get("AI_BASE_URL", "https://ai.jinbufenzi.com/v1")
-    api_key = os.environ.get("AI_API_KEY", "")
-    model = os.environ.get("AI_MODEL", "auto")
-
-    if not api_key:
-        LOG.error("缺少 AI_API_KEY（Secret AI_SIDEHUSTLE_API_KEY 未注入），无法生成。")
-        raise SystemExit("missing AI key")
 
     # 3) 调用 AI（外层生成级重试：应对空生成 / 解析失败 / 结构不完整）
     content = None
