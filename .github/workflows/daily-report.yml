@@ -117,7 +117,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # 心跳：每次运行都写入当日时间戳，确保有 commit/push 活动
           echo "$(TZ=Asia/Shanghai date '+%F %T')" > state/heartbeat.txt
-          git add state/ data/ || true
+          # 仅提交 state/heartbeat.txt（data/ 为运行时产物，已在 .gitignore 忽略，不进 git 历史）
+          git add state/heartbeat.txt || true
           git diff --cached --quiet || git commit -m "daily: $(TZ=Asia/Shanghai date +%F) [heartbeat]"
           # 推送前先 rebase 远端：规避并行/历史漂移导致的 non-fast-forward
           for j in 1 2 3; do
