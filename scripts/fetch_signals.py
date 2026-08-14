@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import json
+import time
 import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -58,14 +59,53 @@ def _clean_text(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _http_get(url, headers=None, timeout=20):
+def _short(url, n=64):
+    return url if len(url) <= n else url[:n] + "…"
+
+
+def _http_get(url, headers=None, timeout=(15, 90), retries=2, backoff=5):
+    """带「超时元组 + 重试 + 退避」的 HTTP GET，专为慢源/抖动网络设计。
+
+    - timeout: (connect, read)。默认连接 15s、读取 90s——RSS/rsshub/GitHub raw/
+      trending 偶发慢，给足读取余量，避免被误判超时丢源；
+    - 偶发超时 / 连接抖动 / 429 / 5xx 自动重试 retries 次，退避线性增长；
+    - 4xx 其他（鉴权/参数错误）直接抛出，重试无意义；
+    - 单源失败不影响整体（调用方 main 已按源 try/except 隔离）。
+    """
     import requests
     h = {"User-Agent": "Mozilla/5.0 (compatible; sidehustle-bot/1.0)"}
     if headers:
         h.update(headers)
-    r = requests.get(url, headers=h, timeout=timeout)
-    r.raise_for_status()
-    return r
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            t0 = time.time()
+            r = requests.get(url, headers=h, timeout=timeout)
+            r.raise_for_status()
+            LOG.info("抓取成功 %s（耗时 %.1fs，第 %d/%d 次）", _short(url), time.time() - t0, attempt, retries)
+            return r
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.InvalidURL) as e:
+            last_err = e
+            wait = backoff * attempt
+            LOG.warning("抓取临时失败 %s（%s，第 %d/%d 次），%ds 后重试",
+                        _short(url), type(e).__name__, attempt, retries, wait)
+            if attempt < retries:
+                time.sleep(wait)
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response else 0
+            if status == 429 or 500 <= status < 600:
+                last_err = e
+                wait = backoff * attempt
+                LOG.warning("抓取 HTTP %s %s（第 %d/%d 次），%ds 后重试",
+                            status, _short(url), attempt, retries, wait)
+                if attempt < retries:
+                    time.sleep(wait)
+            else:
+                LOG.error("抓取 HTTP %s（非重试类）放弃: %s", status, _short(url))
+                raise
+    raise last_err or RuntimeError("http_get failed: " + url)
 
 
 # ---------------- 解析器 ----------------
@@ -79,7 +119,15 @@ def parse_rss(cfg):
     url = cfg["url"]
     name = cfg["name"]
     microblog = cfg.get("microblog", False)
-    d = feedparser.parse(url)
+    # 关键修复：RSS 不再交给 feedparser 自带 HTTP（超时完全不可控），
+    # 改为先走受控 _http_get（90s 读取超时 + 重试），再 parseString。
+    try:
+        resp = _http_get(url)
+        raw = resp.text
+    except Exception as e:
+        LOG.warning("RSS 抓取失败 %s: %s", name, e)
+        return []
+    d = feedparser.parseString(raw)
     out = []
     for e in d.entries[: C.MAX_PER_SOURCE]:
         link = e.get("link") or e.get("id") or ""
