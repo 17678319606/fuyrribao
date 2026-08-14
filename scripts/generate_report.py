@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """步骤2：读取当日去重信号，调用 AI 生成结构化日报 JSON。
 
-健壮性增强（v2.1）：
-- 自动重试：针对 GitHub 海外 Runner 偶发 DNS / 连接失败做指数退避重试，
-  覆盖 NameResolutionError / ConnectTimeout / Connection reset 等抖动。
-- 可选代理池：通过 Secret `AI_PROXY_POOL` 配置多个国内出口代理
-  （逗号 / 分号 / 换行分隔，支持 http / https / socks5）。
-  每次运行随机打散实现轮换，并对各端点做探活；
-  直连优先，代理作为兜底——既能扛偶发 DNS 抖动，也能解决国内域名被海外解析不到的问题。
+高延迟优化（v2.2）：
+- 聚合 AI 网关实测平均延迟 ~28s、P99 ~60s，故把单次读取超时放宽到 240s，
+  连接超时 20s，避免网关正常响应期间被误判为超时。
+- 严格限制重试次数：每个端点最多 2 次、外层生成最多 2 次、shell 自愈最多 2 轮，
+  杜绝「指数退避 × 多层重试」导致的时间爆炸。
+- 保留 DNS-over-HTTPS 兜底与代理池，用于海外 Runner 偶发解析抖动。
+- 保留降级兜底：当 AI 所有路径确实失败时，用原始信号生成「今日信号速览」日报，
+  确保高延迟/短暂故障期间仍有内容可发。
 """
 import os
 import sys
@@ -29,10 +30,10 @@ LOG = C.get_logger()
 SKILL_FILE = C.SKILL_FILE
 DATA_DIR = C.DATA_DIR
 
-RETRY_PER_ENDPOINT = 4      # 每个候选端点（直连 / 代理）的最大尝试次数
-BACKOFF_BASE = 3            # 退避基数（秒），呈指数增长：3 / 6 / 12 / 24s
-REQ_TIMEOUT = (15, 180)     # (connect, read)；read 180s 足够容纳流式长生成，且不超过 job 超时
-GEN_RETRIES = 3             # main() 外层生成级重试：应对空生成 / 解析失败 / 结构不完整
+RETRY_PER_ENDPOINT = 2      # 高延迟网关：重试次数严格收敛，避免时间爆炸
+BACKOFF_BASE = 5            # 退避基数 5s：网关抖动能喘口气，但不会指数滚雪球
+REQ_TIMEOUT = (20, 240)     # 聚合网关实测平均 28s、P99 ~60s；240s 读取超时给足余量
+GEN_RETRIES = 2             # 外层生成重试收敛为 2 次（正常 1 次，异常 1 次）
 MAX_INPUT_SIGNALS = 80      # 送入 AI 的候选上限（控制输入上下文，给源站减负）
 MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生成耗时，避免 Cloudflare 524）
 
@@ -151,6 +152,7 @@ def _install_dns_patch(host):
 
 def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
     """调用 /chat/completions，带端点轮换 + 重试。返回模型原始 content 字符串。"""
+    start = time.time()
     url = base_url.rstrip("/") + "/chat/completions"
     # 解析目标 host（从 base_url 提取），用 DoH 兜底修补海外 Runner 的偶发 DNS 失败
     try:
@@ -228,19 +230,15 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                                 wait)
                     time.sleep(wait)
                     continue
-                LOG.info("AI 请求成功（端点=%s，约 %d 字）", label, len(content))
+                LOG.info("AI 请求成功（端点=%s，耗时 %.1fs，约 %d 字）",
+                         label, time.time() - start, len(content))
                 return content
-            except socket.gaierror as e:
-                # DNS 解析失败（域名不存在 / 无法解析）是「确定性失败」——
-                # 例如 ai.jinbufenzi.com 子域未配置 DNS 记录，重试必败且白白浪费数分钟，
-                # 直接抛出以快速触发降级兜底，避免 workflow 卡死。
-                last_err = e
-                LOG.error("DNS 解析失败（域名不可用，确定性失败），立即失败触发降级：%s", e)
-                raise
             except (requests.exceptions.ConnectionError,
                     requests.exceptions.Timeout,
-                    requests.exceptions.InvalidURL) as e:
-                # 连接被重置 / 超时 —— 典型海外 Runner 偶发抖动，退避重试仍有意义
+                    requests.exceptions.InvalidURL,
+                    socket.gaierror) as e:
+                # DNS 解析失败 / 连接被重置 / 超时 —— 典型海外 Runner 抖动或网关高延迟。
+                # 重试次数已收敛为 2 次，不会无限卡死；DNS 失败会由 DoH 兜底自动修补。
                 last_err = e
                 wait = BACKOFF_BASE * (2 ** (attempt - 1))
                 LOG.warning("端点 %s 连接失败(%s)，%ds 后重试",
@@ -279,7 +277,9 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
         LOG.warning("非流式兜底返回内容无法解析为 JSON")
     except Exception as e:
         LOG.warning("非流式兜底请求失败：%s", e)
-    raise RuntimeError(f"所有候选端点（{len(cands)}）流式+非流式兜底均失败，最后错误：{last_err}")
+    raise RuntimeError(
+        f"所有候选端点（{len(cands)}）流式+非流式兜底均失败，总耗时 %.1fs，最后错误：{last_err}" % (
+            time.time() - start,))
 
 
 def _extract_json(text):
@@ -452,12 +452,16 @@ def screen_signals(signals, base_url, api_key, model, system_prompt):
     batches = [signals[i:i + SCREEN_BATCH] for i in range(0, len(signals), SCREEN_BATCH)]
     by_id = {s["id"]: s for s in signals if s.get("id")}
     scored = {}
+    t0 = time.time()
     for bi, batch in enumerate(batches):
+        bs = time.time()
         try:
             picks = _screen_one_batch(batch, base_url, api_key, model, system_prompt)
         except Exception as e:
             LOG.warning("分批筛选第 %d/%d 批失败，跳过该批：%s", bi + 1, len(batches), e)
             continue
+        LOG.info("分批筛选第 %d/%d 批完成，本批耗时 %.1fs，返回 %d 条",
+                 bi + 1, len(batches), time.time() - bs, len(picks))
         for p in picks:
             pid = p.get("id")
             if pid not in by_id:
@@ -471,15 +475,24 @@ def screen_signals(signals, base_url, api_key, model, system_prompt):
                 scored[pid] = (sc, p.get("reason", ""))
     ranked = sorted(scored.items(), key=lambda kv: kv[1][0], reverse=True)
     kept = [by_id[pid] for pid, _ in ranked[:SCREEN_FINAL_CAP]]
-    LOG.info("分批筛选完成：%d 候选 → %d 批 → 汇总 %d 条精华 → 取前 %d 条进生成",
-             len(signals), len(batches), len(scored), len(kept))
+    LOG.info("分批筛选完成：%d 候选 → %d 批 → 汇总 %d 条精华 → 取前 %d 条进生成，总耗时 %.1fs",
+             len(signals), len(batches), len(scored), len(kept), time.time() - t0)
     return kept
 
 
 def main():
+    overall_t0 = time.time()
     C.ensure_dirs()
     today = C.date_str()
     LOG.info("开始生成 %s 日报", today)
+
+    # DNS 预补丁：提前解析一次，避免首次 AI 调用时才去解析浪费时间
+    base_url = os.environ.get("AI_BASE_URL", "https://ai.jinbufenzi.com/v1")
+    try:
+        _host = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(base_url).netloc or "ai.jinbufenzi.com"
+    except Exception:
+        _host = "ai.jinbufenzi.com"
+    _install_dns_patch(_host)
 
     # 1) 读取信号
     cand_path = os.path.join(DATA_DIR, f"candidates-{today}.json")
@@ -490,8 +503,7 @@ def main():
         signals = candidates.get("candidates") or candidates.get("items") or []
     raw_signals = list(signals)  # 保留原始候选快照，供 AI 失败时降级速览使用
 
-    # 提前读取 AI 配置（供分批筛选复用）
-    base_url = os.environ.get("AI_BASE_URL", "https://ai.jinbufenzi.com/v1")
+    # AI 配置（已在开头做 DNS 预补丁）
     api_key = os.environ.get("AI_API_KEY", "")
     model = os.environ.get("AI_MODEL", "auto")
 
@@ -592,7 +604,8 @@ def main():
         C.save_json(out_path, report)
         total = sum(len(report["modules"].get(k, [])) for k in
                     ("project_opportunities", "growth_operations", "views_insights"))
-        LOG.info("日报已生成：3 个模块共 %d 条，写入 %s", total, out_path)
+        LOG.info("日报已生成：3 个模块共 %d 条，写入 %s，总耗时 %.1fs",
+                 total, out_path, time.time() - overall_t0)
     except SystemExit as e:
         LOG.warning("⚠️ AI 生成失败（%s），降级为「今日信号速览」以保证每天有内容。", e)
         report = _degraded_report(today, raw_signals)
@@ -600,7 +613,8 @@ def main():
         C.save_json(out_path, report)
         total = sum(len(report["modules"].get(k, [])) for k in
                     ("project_opportunities", "growth_operations", "views_insights"))
-        LOG.info("降级日报已生成：共 %d 条信号速览，写入 %s", total, out_path)
+        LOG.info("降级日报已生成：共 %d 条信号速览，写入 %s，总耗时 %.1fs",
+                 total, out_path, time.time() - overall_t0)
 
 
 if __name__ == "__main__":
