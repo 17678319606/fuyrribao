@@ -169,6 +169,9 @@ def _esc(s):
 
 def render_item(it, modcls):
     """渲染单条卡片。空字段不展示（标题+内容都隐藏）。"""
+    if not isinstance(it, dict):
+        # 极端兜底：非字典条目（AI 偶发返回字符串）直接转纯文本卡片，避免崩溃
+        it = {"title": str(it)[:200]}
     title = _esc(it.get("title", ""))
     src_name = _esc(it.get("source_name", ""))
     src_url = _esc(it.get("source_url", ""))
