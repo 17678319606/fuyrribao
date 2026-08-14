@@ -272,21 +272,39 @@ def get_category_id(session, base, auth, name):
     return r.json()["id"]
 
 
-def find_existing_post(session, base, auth, title):
-    """返回 (文章id, 内容HTML)；无匹配返回 (None, '')。供防重复/强制更新/自愈判断。"""
+def find_existing_post(session, base, auth, today):
+    """返回 (文章id, 内容HTML)；无匹配返回 (None, '')。供防重复/强制更新/自愈判断。
+
+    去重策略（混合触发防重复核心）：
+    - 用「今日日期」作为检索词（比整标题稳定；WP 搜索对 '·' 与空格分词不友好，
+      整标题检索极易漏匹配，导致"以为没发过又发一篇"）；
+    - 再精确比对标题是否同时含「今日日期」与「副业日报」，避免跨日/内容误命中。
+    - per_page 放大到 20，覆盖历史同名文章。
+    """
     import requests
     try:
         r = session.get(base + "/wp-json/wp/v2/posts",
-                        params={"search": title, "status": "publish"},
+                        params={"search": today, "status": "publish", "per_page": 20},
                         headers=auth, timeout=30)
         r.raise_for_status()
     except Exception as e:
         LOG.warning("查询已存在文章失败：%s", e)
         return None, ""
     for p in r.json():
-        if title in p.get("title", {}).get("rendered", ""):
+        rendered = p.get("title", {}).get("rendered", "")
+        if today in rendered and "副业日报" in rendered:
             return p["id"], p.get("content", {}).get("rendered", "")
     return None, ""
+
+
+def _record_posted(today, post_id, link):
+    """回写今日发布状态到 state/last_posted.json（透明化 + 便于排障；失败不影响发布）。"""
+    try:
+        C.save_json(os.path.join(C.STATE_DIR, "last_posted.json"),
+                    {"date": today, "post_id": post_id, "link": link,
+                     "run_id": os.environ.get("GITHUB_RUN_ID", "")})
+    except Exception as e:
+        LOG.warning("回写 last_posted.json 失败（不影响发布）：%s", e)
 
 
 def main():
@@ -316,7 +334,7 @@ def main():
     auth = {"Authorization": "Basic " + base64.b64encode(
         f"{user}:{app_pw}".encode()).decode(), "Content-Type": "application/json"}
 
-    existing_id, existing_html = find_existing_post(session, base, auth, title)
+    existing_id, existing_html = find_existing_post(session, base, auth, today)
     force = os.environ.get("FORCE_UPDATE") == "1"
     # 自愈：若已发布文章残缺/为空（无卡片），即便非强制也覆盖修复
     broken = bool(existing_id) and ("shr-card" not in existing_html) and ("<article" not in existing_html)
@@ -338,6 +356,7 @@ def main():
             link = r.json().get("link", "")
             LOG.info("已更新: %s", link)
             print("PUBLISHED_URL=" + link)
+            _record_posted(today, existing_id, link)
             return
         LOG.info("今日文章已存在且完整，跳过发布（防重复）。")
         return
@@ -356,6 +375,7 @@ def main():
     link = r.json().get("link", "")
     LOG.info("已发布: %s", link)
     print("PUBLISHED_URL=" + link)
+    _record_posted(today, r.json().get("id"), link)
 
 
 if __name__ == "__main__":
