@@ -34,14 +34,27 @@ RETRY_PER_ENDPOINT = 2      # 高延迟网关：重试次数严格收敛，避�
 BACKOFF_BASE = 5            # 退避基数 5s：网关抖动能喘口气，但不会指数滚雪球
 REQ_TIMEOUT = (20, 240)     # 聚合网关实测平均 28s、P99 ~60s；240s 读取超时给足余量
 GEN_RETRIES = 2             # 外层生成重试收敛为 2 次（正常 1 次，异常 1 次）
-MAX_INPUT_SIGNALS = 80      # 送入 AI 的候选上限（控制输入上下文，给源站减负）
-MAX_OUTPUT_TOKENS = 9000    # 输出 token 上限（兼顾内容量与源站生成耗时，避免 Cloudflare 524）
+MAX_INPUT_SIGNALS = 50      # 送入 AI 的候选上限（聚合网关高延迟，控制上下文长度保稳定）
+MAX_OUTPUT_TOKENS = 6000    # 输出 token 上限（高延迟网关：收敛输出，降低超时/截断概率）
 
 # —— 分批筛选（避免大量候选被直接截断丢弃，提升内容丰富度）——
 SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
 SCREEN_BATCH = 60         # 每批送入筛选的候选数（平衡单批覆盖度与调用次数）
-SCREEN_KEEP_PER_BATCH = 12  # 每批最多保留的精华条数（仅作日志参考，实际取汇总 TopN）
-SCREEN_FINAL_CAP = 100    # 筛选后送入最终生成的最大条数（安全上限，防个别源爆量撑爆上下文）
+SCREEN_KEEP_PER_BATCH = 10  # 每批最多保留的精华条数（仅作日志参考，实际取汇总 TopN）
+SCREEN_FINAL_CAP = 35     # 筛选后送入最终生成的最大条数（收敛上下文，减少 400/截断）
+
+
+def _trim_signals_for_prompt(signals, max_content=400):
+    """为 prompt 裁剪信号：保留完整元数据，content 截断到 max_content 字符，
+    减少网关上下文压力，同时保留关键信息供 AI 判断。"""
+    out = []
+    for s in signals:
+        c = dict(s)
+        content = c.get("content") or ""
+        if len(content) > max_content:
+            c["content"] = content[:max_content].rstrip() + "…（已截断）"
+        out.append(c)
+    return out
 
 
 def _is_valid_proxy(p):
@@ -150,8 +163,12 @@ def _install_dns_patch(host):
     LOG.info("DoH 兜底：%s 固定解析到 %s（后续直连不再依赖 Runner 本地 DNS）", host, target)
 
 
-def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
-    """调用 /chat/completions，带端点轮换 + 重试。返回模型原始 content 字符串。"""
+def _call_ai(base_url, api_key, model, system_prompt, user_prompt, stream=True):
+    """调用 /chat/completions，带端点轮换 + 重试。返回模型原始 content 字符串。
+
+    stream=True  用于筛选等短输出场景，可降低网关静默超时概率；
+    stream=False 用于最终日报生成，规避大输出流被网关截断导致 JSON 不完整。
+    """
     start = time.time()
     url = base_url.rstrip("/") + "/chat/completions"
     # 解析目标 host（从 base_url 提取），用 DoH 兜底修补海外 Runner 的偶发 DNS 失败
@@ -169,7 +186,7 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
         "model": model,
         "temperature": 0.5,
         "max_tokens": MAX_OUTPUT_TOKENS,
-        "stream": True,   # 流式：token 持续输出可避免 Cloudflare 524（源站静默超时）
+        "stream": stream,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -178,18 +195,31 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
 
     cands = _candidate_endpoints()
     last_err = None
+    mode = "stream" if stream else "non-stream"
     for ci, proxy in enumerate(cands):
         proxies = {"http": proxy, "https": proxy} if proxy else None
         label = proxy or "直连"
         for attempt in range(1, RETRY_PER_ENDPOINT + 1):
             try:
-                LOG.info("AI 请求 [端点 %d/%d=%s] 第 %d/%d 次尝试 (stream)",
-                         ci + 1, len(cands), label, attempt, RETRY_PER_ENDPOINT)
+                LOG.info("AI 请求 [端点 %d/%d=%s] 第 %d/%d 次尝试 (%s)",
+                         ci + 1, len(cands), label, attempt, RETRY_PER_ENDPOINT, mode)
                 resp = requests.post(
                     url, headers=headers, json=payload,
-                    proxies=proxies, timeout=REQ_TIMEOUT, stream=True,
+                    proxies=proxies, timeout=REQ_TIMEOUT, stream=stream,
                 )
                 resp.raise_for_status()
+
+                if not stream:
+                    # 非流式：直接取整包内容
+                    msg = (resp.json().get("choices", [{}])[0]
+                           .get("message", {}).get("content", ""))
+                    if msg and _extract_json(msg) is not None:
+                        LOG.info("AI 请求成功（端点=%s，模式=non-stream，耗时 %.1fs，约 %d 字）",
+                                 label, time.time() - start, len(msg))
+                        return msg
+                    LOG.warning("非流式返回无法解析为 JSON，长度 %d", len(msg))
+                    raise RuntimeError("non-stream response not valid JSON")
+
                 # 流式聚合 SSE（强制 UTF-8 解码，避免中文被误判为 Latin-1 破坏 JSON）
                 content = ""
                 raw_dump = []
@@ -230,7 +260,7 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                                 wait)
                     time.sleep(wait)
                     continue
-                LOG.info("AI 请求成功（端点=%s，耗时 %.1fs，约 %d 字）",
+                LOG.info("AI 请求成功（端点=%s，模式=stream，耗时 %.1fs，约 %d 字）",
                          label, time.time() - start, len(content))
                 return content
             except (requests.exceptions.ConnectionError,
@@ -246,39 +276,45 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt):
                 time.sleep(wait)
             except requests.exceptions.HTTPError as e:
                 status = e.response.status_code if e.response else 0
+                body = ""
+                try:
+                    if e.response is not None:
+                        body = e.response.text[:500]
+                except Exception:
+                    pass
                 last_err = e
                 if _is_retryable_http(status):
                     wait = BACKOFF_BASE * (2 ** (attempt - 1))
                     LOG.warning("AI 接口返回 %s，%ds 后重试", status, wait)
                     time.sleep(wait)
                 else:
-                    LOG.error("AI 接口返回 %s，中止重试：%s",
-                              status, (e.response.text[:300] if e.response else ""))
+                    LOG.error("AI 接口返回 %s，中止重试：%s | %s",
+                              status, body, str(e))
                     raise
             except (KeyError, IndexError, json.JSONDecodeError) as e:
                 last_err = e
                 LOG.error("AI 返回结构异常：%s", e)
                 raise
-    # ── 兜底：非流式请求 ──
-    # 流式偶发被网关/CF 中途掐断且多端点重试仍失败时，尝试一次非流式（整包返回，规避分块截断）
-    # 风险：生成耗时可能触发 Cloudflare 524；故仅作最后兜底，且用较短 read 超时快速失败
-    try:
-        LOG.info("流式多端点重试均失败，尝试非流式兜底请求（整包返回）")
-        nb_payload = dict(payload)
-        nb_payload["stream"] = False
-        r2 = requests.post(url, headers=headers, json=nb_payload,
-                           proxies=None, timeout=(15, 160))
-        r2.raise_for_status()
-        msg = (r2.json().get("choices", [{}])[0]
-               .get("message", {}).get("content", ""))
-        if msg and _extract_json(msg) is not None:
-            LOG.info("非流式兜底成功（约 %d 字）", len(msg))
-            return msg
-        LOG.warning("非流式兜底返回内容无法解析为 JSON")
-    except Exception as e:
-        LOG.warning("非流式兜底请求失败：%s", e)
+    # ── 兜底：非流式请求（仅当原始调用是流式时才有意义） ──
+    # 流式偶发被网关/CF 中途掐断且多端点重试均失败时，尝试一次非流式（整包返回，规避分块截断）
+    if stream:
+        try:
+            LOG.info("流式多端点重试均失败，尝试非流式兜底请求（整包返回）")
+            nb_payload = dict(payload)
+            nb_payload["stream"] = False
+            r2 = requests.post(url, headers=headers, json=nb_payload,
+                               proxies=None, timeout=REQ_TIMEOUT)
+            r2.raise_for_status()
+            msg = (r2.json().get("choices", [{}])[0]
+                   .get("message", {}).get("content", ""))
+            if msg and _extract_json(msg) is not None:
+                LOG.info("非流式兜底成功（约 %d 字）", len(msg))
+                return msg
+            LOG.warning("非流式兜底返回内容无法解析为 JSON")
+        except Exception as e:
+            LOG.warning("非流式兜底请求失败：%s", e)
     raise RuntimeError(
-        f"所有候选端点（{len(cands)}）流式+非流式兜底均失败，总耗时 %.1fs，最后错误：{last_err}" % (
+        f"所有候选端点（{len(cands)}）{mode} 均失败，总耗时 %.1fs，最后错误：{last_err}" % (
             time.time() - start,))
 
 
@@ -549,21 +585,25 @@ def main():
         LOG.error("无法读取 SKILL.md：%s", e)
         raise
 
+    # 为最终生成裁剪信号：保留元数据，content 截断到 400 字符，
+    # 减少高延迟网关上下文压力，降低 400/截断概率。
+    prompt_signals = _trim_signals_for_prompt(signals, max_content=400)
     user_prompt = (
         f"今天是 {today}（北京时间）。以下是已完成去重的当日增量信号（JSON）：\n"
-        f"```json\n{json.dumps(signals, ensure_ascii=False, indent=2)}\n```\n"
+        f"```json\n{json.dumps(prompt_signals, ensure_ascii=False, indent=2)}\n```\n"
         f"请按 SKILL v2 规则，输出 ai-sidehustle-report 日报 JSON。"
     )
 
     # 3) 调用 AI（外层生成级重试：应对空生成 / 解析失败 / 结构不完整）
     #    整个生成过程包在 try 中：一旦 AI 彻底不可用（如 DNS 失效），
     #    捕获 SystemExit 降级为「今日信号速览」，保证每天仍有内容发布。
+    #    最终日报生成使用 non-stream：大输出场景下整包返回更稳定，避免流式截断。
     report = None
     try:
         content = None
         for gen in range(1, GEN_RETRIES + 1):
             try:
-                content = _call_ai(base_url, api_key, model, system_prompt, user_prompt)
+                content = _call_ai(base_url, api_key, model, system_prompt, user_prompt, stream=False)
             except Exception as e:
                 LOG.error("AI 调用失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
                 if gen < GEN_RETRIES:
