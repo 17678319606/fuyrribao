@@ -1,5 +1,4 @@
-# 一次性诊断：枚举 AQ. Auth key + project 94038486169 可访问的 Gemini 模型
-# 仅在 sandbox 无法直连 googleapis.com 时，借海外 Runner 跑。跑完即删。
+# 一次性诊断（聚焦）：打印全部 50 个模型名，并对 latest 别名单发确认 200
 name: gemini-diag
 
 on:
@@ -15,10 +14,10 @@ jobs:
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
-      - name: Gemini 模型诊断
+      - name: Gemini 模型诊断（聚焦）
         run: |
           python3 - <<'PY'
-          import os, json, urllib.request, urllib.error, urllib.parse
+          import os, json, time, urllib.request, urllib.error
 
           KEY = os.environ.get("GEMINI_API_KEY", "")
           BASE = "https://generativelanguage.googleapis.com/v1beta"
@@ -36,57 +35,27 @@ jobs:
               except Exception as e:
                   return 0, "ERR " + repr(e)
 
-          # 1) 列出模型
-          print("\n===== 1) LIST MODELS =====")
+          # 1) 打印全部模型名
+          print("\n===== 全部模型名（共 50） =====")
           st, txt = http("GET", f"{BASE}/models?key={KEY}")
-          names = []
           if st == 200:
-              try:
-                  data = json.loads(txt)
-                  names = [m.get("name", "") for m in data.get("models", [])]
-                  interesting = [n for n in names if any(k in n.lower() for k in ("flash", "pro"))]
-                  print(f"LIST OK，总模型数={len(names)}")
-                  print("FLASH/PRO 模型：")
-                  for n in interesting:
-                      print("  ", n)
-              except Exception as e:
-                  print("LIST 解析失败:", e, txt[:300])
+              for m in json.loads(txt).get("models", []):
+                  print("  ", m.get("name", ""), "|", m.get("displayName", ""))
           else:
-              print(f"LIST 失败 HTTP {st}:", txt[:400])
+              print("LIST 失败 HTTP", st, txt[:300])
 
-          # 2) 测试 generateContent（非流式，模型名合法性金标准）
-          print("\n===== 2) generateContent 候选模型 =====")
-          cands = [
-              "gemini-2.5-flash", "gemini-2.5-flash-latest", "gemini-2.5-flash-lite",
-              "gemini-2.5-pro", "gemini-2.5-pro-latest",
-              "gemini-flash-latest", "gemini-pro-latest",
-              "gemini-2.0-flash", "gemini-1.5-flash",
-          ]
-          good = []
-          for m in cands:
+          # 2) 对 latest 别名单发确认（间隔 6s，避免 429 突发）
+          print("\n===== 单发确认 latest 别名 =====")
+          for m in ["gemini-flash-latest", "gemini-pro-latest"]:
+              time.sleep(6)
               body = {
                   "contents": [{"role": "user", "parts": [{"text": "reply with exactly: OK"}]}],
                   "generationConfig": {"maxOutputTokens": 10},
               }
               st, txt = http("POST", f"{BASE}/models/{m}:generateContent?key={KEY}", body)
-              if st == 200:
-                  print(f"  [OK]   {m} -> {txt[:80]}")
-                  good.append(m)
-              else:
-                  print(f"  [FAIL] {m} -> HTTP {st} {txt[:120]}")
-          print("\n可用（generateContent 200）模型:", good or "无")
-
-          # 3) 对首个可用模型测试 streamGenerateContent?alt=sse（我们代码用的流式路径）
-          print("\n===== 3) streamGenerateContent?alt=sse（流式路径） =====")
-          if good:
-              m = good[0]
-              body = {
-                  "contents": [{"role": "user", "parts": [{"text": "reply with exactly: OK"}]}],
-                  "generationConfig": {"maxOutputTokens": 10},
-              }
-              st, txt = http("POST", f"{BASE}/models/{m}:streamGenerateContent?alt=sse&key={KEY}", body)
-              print(f"  模型 {m} streamGenerateContent?alt=sse -> HTTP {st}")
-              print("  前 200 字符：", txt[:200].replace("\n", "\\n"))
-          else:
-              print("  无可用模型，跳过流式测试")
+              print(f"  [HTTP {st}] {m} -> {txt[:120]}")
+              # 顺带验流式 ?alt=sse
+              time.sleep(6)
+              st2, txt2 = http("POST", f"{BASE}/models/{m}:streamGenerateContent?alt=sse&key={KEY}", body)
+              print(f"  [HTTP {st2}] {m} (stream?alt=sse) 前100: {txt2[:100].replace(chr(10),'\\\\n')}")
           PY
