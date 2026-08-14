@@ -105,8 +105,9 @@ def _candidate_endpoints():
 
 
 def _is_retryable_http(status):
-    """429 限流 / 5xx 服务端错误可重试；4xx 其他（鉴权/参数错误）直接放弃。"""
-    return status == 429 or (500 <= status < 600)
+    """连接层失败(status=0，无响应体)/限流 429 / 5xx 服务端错误可重试；
+    4xx 其他（鉴权/参数错误）直接放弃。"""
+    return status == 0 or status == 429 or (500 <= status < 600)
 
 
 def _retry_after_seconds(resp):
