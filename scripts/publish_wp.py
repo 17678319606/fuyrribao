@@ -209,14 +209,32 @@ def render(report):
     date = report.get("date", C.date_str())
     total = sum(len(report["modules"].get(k, [])) for k, _, _ in MODULES)
 
+    ai_failed = report.get("ai_failed", False)
+    if ai_failed:
+        banner = (
+            '<div class="lede shr-lede" style="background:#fff7ed;border-color:#fed7aa;'
+            'border-left-color:#ea580c;color:#9a3412;">⚠️ <strong>AI 精筛引擎暂不可用</strong>'
+            '（ai.jinbufenzi.com 域名解析失败），本篇为「今日信号速览」——原始采集信号未经 AI 筛选，'
+            '点击卡片可阅读原文。修复 AI 端点后将自动恢复 AI 精筛日报。</div>\n'
+        )
+        lede = (
+            f'<div class="lede shr-lede">今日共采集 <strong>{total}</strong> 条信号'
+            f'（未经 AI 筛选，全部归入「项目机会库」）。</div>\n'
+        )
+    else:
+        banner = ""
+        lede = (
+            f'<div class="lede shr-lede">今日精选 <strong>{total}</strong> 条内容，'
+            f'按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>\n'
+        )
+
     body = (
         f'<header class="top shr-header">\n'
         f'<div class="kicker shr-kicker">AI 副业日报</div>\n'
         f'<h1 class="shr-h1">副业日报 · {_esc(date)}</h1>\n'
         f'<div class="date shr-date">{_esc(date)}（北京时间）· 自动生成</div>\n'
         f'</header>\n'
-        f'<div class="lede shr-lede">今日精选 <strong>{total}</strong> 条内容，'
-        f'按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>\n'
+        f'{banner}{lede}'
     )
 
     for key, mtitle, cls in MODULES:
