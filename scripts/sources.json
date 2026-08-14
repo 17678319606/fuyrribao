@@ -18,5 +18,8 @@
   { "id": "hn", "type": "rss", "url": "https://hnrss.org/frontpage", "name": "Hacker News" },
   { "id": "reddit_sideproject", "type": "reddit_json", "url": "https://www.reddit.com/r/SideProject/.json?limit=100", "name": "Reddit r/SideProject" },
   { "id": "producthunt", "type": "rss", "url": "https://www.producthunt.com/feed", "name": "Product Hunt" },
-  { "id": "indiehackers", "type": "rss", "url": "https://www.indiehackers.com/feed.xml", "name": "IndieHackers" }
+  { "id": "indiehackers", "type": "rss", "url": "https://www.indiehackers.com/feed.xml", "name": "IndieHackers" },
+  { "id": "ruanyifeng", "type": "rss", "url": "https://www.ruanyifeng.com/blog/atom.xml", "name": "阮一峰科技周刊" },
+  { "id": "36kr", "type": "rss", "url": "https://36kr.com/feed", "name": "36氪" },
+  { "id": "ifanr", "type": "rss", "url": "https://www.ifanr.com/feed", "name": "爱范儿" }
 ]
