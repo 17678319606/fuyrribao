@@ -18,6 +18,7 @@ import re
 import random
 import socket
 import logging
+import datetime
 from urllib.parse import urlparse
 
 import requests
@@ -30,12 +31,13 @@ LOG = C.get_logger()
 SKILL_FILE = C.SKILL_FILE
 DATA_DIR = C.DATA_DIR
 
-RETRY_PER_ENDPOINT = 2      # 高延迟网关：重试次数严格收敛，避免时间爆炸
-BACKOFF_BASE = 5            # 退避基数 5s：网关抖动能喘口气，但不会指数滚雪球
-REQ_TIMEOUT = (20, 240)     # 聚合网关实测平均 28s、P99 ~60s；240s 读取超时给足余量
-GEN_RETRIES = 2             # 外层生成重试收敛为 2 次（正常 1 次，异常 1 次）
+RETRY_PER_ENDPOINT = 2      # 每端点重试：保留收敛（避免端点叠加时间爆炸）；靠 DoH+代理池提供冗余
+BACKOFF_BASE = 8            # 退避基数 8s：网关高延迟，更长退避让其喘气（用户允许稍晚生成）
+REQ_TIMEOUT = (20, 300)     # 聚合网关实测 P99~60s；放宽读超时到 300s，给慢网关充足余量
+GEN_RETRIES = 3             # 外层生成重试 3 次（正常 1 次，异常再 2 次），增强生成级容错
 MAX_INPUT_SIGNALS = 50      # 送入 AI 的候选上限（聚合网关高延迟，控制上下文长度保稳定）
 MAX_OUTPUT_TOKENS = 6000    # 输出 token 上限（高延迟网关：收敛输出，降低超时/截断概率）
+GEN_PHASE_BUDGET = 75 * 60  # 生成阶段总预算(秒)：超预算即降级，确保 job 超时前必触发兜底
 
 # —— 分批筛选（避免大量候选被直接截断丢弃，提升内容丰富度）——
 SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
@@ -105,6 +107,37 @@ def _candidate_endpoints():
 def _is_retryable_http(status):
     """429 限流 / 5xx 服务端错误可重试；4xx 其他（鉴权/参数错误）直接放弃。"""
     return status == 429 or (500 <= status < 600)
+
+
+def _retry_after_seconds(resp):
+    """解析 Retry-After（整数秒或 HTTP-date），封顶 60s；无效返回 0。
+    用于尊重网关/服务端明示的限流冷却时间，避免盲目重试打满配额。"""
+    if not resp or not getattr(resp, "headers", None):
+        return 0
+    ra = resp.headers.get("Retry-After")
+    if not ra:
+        return 0
+    ra = ra.strip()
+    try:
+        secs = int(ra)
+        if secs < 0:
+            return 0
+        return min(secs, 60)
+    except ValueError:
+        pass
+    # HTTP-date 形式（如 "Wed, 14 Aug 2026 12:00:00 GMT"）
+    try:
+        import email.utils as eu
+        dt = eu.parsedate_to_datetime(ra)
+        if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            delta = (dt - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+            if delta > 0:
+                return min(int(delta), 60)
+    except Exception:
+        pass
+    return 0
 
 
 # ── DNS-over-HTTPS 兜底：海外 Runner 偶发解析不到国内域名时，
@@ -284,7 +317,8 @@ def _call_ai(base_url, api_key, model, system_prompt, user_prompt, stream=True):
                     pass
                 last_err = e
                 if _is_retryable_http(status):
-                    wait = BACKOFF_BASE * (2 ** (attempt - 1))
+                    # 尊重服务端 Retry-After（限流冷却），否则用指数退避
+                    wait = _retry_after_seconds(e.response) or (BACKOFF_BASE * (2 ** (attempt - 1)))
                     LOG.warning("AI 接口返回 %s，%ds 后重试", status, wait)
                     time.sleep(wait)
                 else:
@@ -599,13 +633,20 @@ def main():
     #    捕获 SystemExit 降级为「今日信号速览」，保证每天仍有内容发布。
     #    最终日报生成使用 non-stream：大输出场景下整包返回更稳定，避免流式截断。
     report = None
+    gen_phase_start = time.time()
     try:
         content = None
         for gen in range(1, GEN_RETRIES + 1):
+            # 生成阶段总预算保护：超预算即停止重试并降级兜底，
+            # 确保即便极端延迟叠加也不会被 job 超时 kill 而当天无内容。
+            if time.time() - gen_phase_start > GEN_PHASE_BUDGET:
+                LOG.warning("⚠️ 生成阶段已超预算 %ds，停止重试并降级。", GEN_PHASE_BUDGET)
+                raise SystemExit("generation budget exceeded")
             try:
                 content = _call_ai(base_url, api_key, model, system_prompt, user_prompt, stream=False)
             except Exception as e:
-                LOG.error("AI 调用失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
+                LOG.error("AI 调用失败（第 %d/%d 次生成，已用 %.1fs）：%s",
+                          gen, GEN_RETRIES, time.time() - gen_phase_start, e)
                 if gen < GEN_RETRIES:
                     time.sleep(BACKOFF_BASE)
                     continue
