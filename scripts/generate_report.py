@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """步骤2：读取当日去重信号，调用 AI 生成结构化日报 JSON。
 
-高延迟优化（v3.0）：
+高延迟优化（v3.0 / v4.2 Gemini 首选）：
 - 移除降级兜底：AI 不可用则直接失败， workflow 随之失败，不会发布非 AI 内容。
-- 支持 AI_BASE_URL_POOL（多镜像/端点 fallback）与 AI_FORCE_NON_STREAM（强制非流式），
-  并允许 AI_REQUEST_TIMEOUT 环境变量覆盖超时，以适配国内镜像或海外 Runner 慢链路。
-- 保留 DNS-over-HTTPS 兜底与代理池，用于海外 Runner 偶发解析抖动。
+- AI 后端首选 Google Gemini（OpenAI 兼容端点）：海外 Runner 直连 Google 全球边缘，
+  规避「海外 Runner → 国内网关」跨境瓶颈（根因）；可选 AI_BASE_URL_POOL 镜像 +
+  AI_FALLBACK_URL（国内网关）兜底。每个端点含独立 (url, key, model)。
+- 允许 AI_FORCE_NON_STREAM（强制非流式）、AI_REQUEST_TIMEOUT（覆盖读超时）以适配慢链路。
+- 保留 DNS-over-HTTPS 兜底与代理池，用于海外 Runner 偶发解析抖动（仅国内网关等易抖动 host）。
 """
 import os
 import sys
@@ -118,7 +120,7 @@ def _parse_proxies():
 def _parse_base_urls():
     """解析候选 base_url：显式 AI_BASE_URL 优先，再拼 AI_BASE_URL_POOL（分号/逗号/换行分隔）。
     去重保序，空值/非 URL 占位符过滤。用于 AI 镜像/备用端点 fallback。"""
-    primary = os.environ.get("AI_BASE_URL", "https://ai.jinbufenzi.com/v1").strip()
+    primary = os.environ.get("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/").strip()
     pool_raw = os.environ.get("AI_BASE_URL_POOL", "").strip()
     seen, out = set(), []
     for u in [primary] + re.split(r"[;,\n]", pool_raw):
@@ -133,7 +135,7 @@ def _parse_base_urls():
         if u not in seen:
             seen.add(u)
             out.append(u)
-    return out or ["https://ai.jinbufenzi.com/v1"]
+    return out or ["https://generativelanguage.googleapis.com/v1beta/openai/"]
 
 
 def _candidate_endpoints():
@@ -217,7 +219,10 @@ def _doh_resolve(host):
 
 
 def _install_dns_patch(host):
-    """若尚未修补，用 DoH 结果固定该 host 的 getaddrinfo 解析。"""
+    """仅对国内网关 jinbufenzi 等偶发解析失败的 host 做 DoH 兜底钉 IP；
+    对 googleapis.com 等全球可达域名直接跳过（正常 DNS 更稳，避免单 IP 钉死）。"""
+    if "jinbufenzi" not in host:
+        return
     if _DNS_PATCH_HOSTS.get(host):
         return
     ips = _doh_resolve(host)
@@ -238,11 +243,13 @@ def _install_dns_patch(host):
 
 
 def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True):
-    """调用 /chat/completions，支持多 base_url fallback + 端点轮换 + 重试。
+    """调用 /chat/completions，支持多 (url,key,model) 端点 fallback + 端点轮换 + 重试。
     返回模型原始 content 字符串。
 
-    - base_urls 可为字符串或列表；列表按顺序依次尝试（主镜像 → 备用镜像）。
-    - AI_FORCE_NON_STREAM=1 时强制全部调用走非流式，避免国际链路流式分块被截断。
+    - base_urls 可为字符串或列表（首选，共用传入的 api_key/model）；
+      另含可选 AI_FALLBACK_URL/KEY/MODEL 兜底端点（默认国内网关，独立 key/model）。
+    - 首选即 Google Gemini OpenAI 兼容端点：海外 Runner 直连，规避跨境瓶颈。
+    - AI_FORCE_NON_STREAM=1 时强制全部调用走非流式。
     - AI_REQUEST_TIMEOUT 可覆盖默认读超时。
     """
     if isinstance(base_urls, str):
@@ -255,29 +262,47 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
     mode = "stream" if stream else "non-stream"
     last_err = None
     timeout = _req_timeout()
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "temperature": 0.5,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "stream": stream,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    }
 
-    for base_url in base_urls:
+    # 展开为 (url, key, model) 端点列表：首选 base_urls（共用 api_key/model）
+    # + 可选兜底（AI_FALLBACK_URL/KEY/MODEL，默认国内网关，独立 key/model）。
+    # 首选即 Google Gemini OpenAI 兼容端点（海外 Runner 直连，规避跨境瓶颈）。
+    endpoints = []
+    seen = set()
+    fb_url = os.environ.get("AI_FALLBACK_URL", "").strip().rstrip("/")
+    fb_key = os.environ.get("AI_FALLBACK_KEY", "").strip()
+    fb_model = os.environ.get("AI_FALLBACK_MODEL", "").strip() or model
+    for u in base_urls:
+        u = (u or "").strip().rstrip("/")
+        if u and u not in seen:
+            seen.add(u)
+            endpoints.append((u, api_key, model))
+    if fb_url and fb_url not in seen:
+        endpoints.append((fb_url, fb_key, fb_model))
+
+    for (base_url, api_key, model) in endpoints:
         url = base_url.rstrip("/") + "/chat/completions"
-        # 解析目标 host，用 DoH 兜底修补海外 Runner 偶发 DNS 失败
+        # 解析目标 host：仅国内网关等易抖动 host 才用 DoH 兜底钉 IP；
+        # googleapis.com 等全球可达域名走正常 DNS 更稳。
         try:
-            _host = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(base_url).netloc or "ai.jinbufenzi.com"
+            _host = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(base_url).netloc \
+                or "generativelanguage.googleapis.com"
         except Exception:
-            _host = "ai.jinbufenzi.com"
+            _host = "generativelanguage.googleapis.com"
         _install_dns_patch(_host)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "temperature": 0.5,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "stream": stream,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
 
         for ci, proxy in enumerate(cands):
             proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -382,11 +407,25 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
     # 非流式兜底：流式（海外链路偶发被截断/524）所有 base_url+端点均失败后，
     # 用同一组 url 做一次整包返回请求，作为最后手段。仍失败才真正报错。
     if stream:
-        LOG.warning("流式多 base_url/端点均失败，尝试非流式兜底（整包返回）一次…")
-        nb_payload = dict(payload)
-        nb_payload["stream"] = False
-        for base_url in base_urls:
+        LOG.warning("流式多端点均失败，尝试非流式兜底（整包返回）一次…")
+        for (base_url, api_key, model) in endpoints:
+            if not api_key:
+                continue
             url = base_url.rstrip("/") + "/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            nb_payload = {
+                "model": model,
+                "temperature": 0.5,
+                "max_tokens": MAX_OUTPUT_TOKENS,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            }
             try:
                 r2 = requests.post(url, headers=headers, json=nb_payload,
                                    proxies=None, timeout=timeout)
@@ -586,7 +625,7 @@ def main():
     # AI 配置与候选端点
     base_urls = _parse_base_urls()
     api_key = os.environ.get("AI_API_KEY", "")
-    model = os.environ.get("AI_MODEL", "auto")
+    model = os.environ.get("AI_MODEL", "gemini-2.5-flash")
     if _force_non_stream():
         LOG.info("强制非流式模式：所有 AI 调用使用整包返回（可在 Secret AI_FORCE_NON_STREAM=0 关闭）")
 
@@ -611,8 +650,8 @@ def main():
         C.save_json(os.path.join(DATA_DIR, f"report-{today}.json"), _empty_report(today))
         return
 
-    if not api_key:
-        LOG.error("缺少 AI_API_KEY（Secret AI_SIDEHUSTLE_API_KEY 未注入），无法生成。")
+    if not api_key and not os.environ.get("AI_FALLBACK_KEY", "").strip():
+        LOG.error("缺少任何 AI key（未配置 GEMINI_API_KEY / AI_SIDEHUSTLE_API_KEY），无法生成。")
         raise SystemExit("missing AI key")
 
     # 2) 候选编排：候选过多 → 分批筛选（AI 分桶挑精华，杜绝截断丢弃）；
