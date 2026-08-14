@@ -98,25 +98,28 @@ def parse_html_zhongnianren(url, name):
                 except Exception as e:
                     LOG.warning("中年指南 RSS 解析失败，回退 HTML: %s", e)
             break
-    # 2) 回退：站内文章链接
+    # 2) 回退：站内 /posts/ 链接；标题取自就近消息块文本
+    #    （不再依赖锚文本作标题：该站“阅读原文 →”锚文本过短会被误丢，且语义为空）
     out = []
     seen = set()
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        if not re.search(r"/(posts?|articles?|p)/", href):
+        if not re.search(r"/posts?/", href):
             continue
         full = href if href.startswith("http") else base + href
         if full in seen or not full.startswith("http"):
             continue
         seen.add(full)
-        text = a.get_text(" ", strip=True)
-        if not text or len(text) < 4:
-            continue
+        # 就近消息块（li/article/div/section/p）文本作为标题与正文，锚文本兜底
+        block = a.find_parent(["li", "article", "div", "section", "p"]) or a.parent
+        title = (block.get_text(" ", strip=True) if block else "") or a.get_text(" ", strip=True)
+        if not title:
+            title = full
+        if len(title) > 180:
+            title = title[:180]
         pub = _now_iso()
-        # 就近时间戳：父容器内第一个带时间属性
-        container = a.find_parent(["li", "article", "div", "section"]) or a.parent
-        if container:
-            for el in container.find_all(True):
+        if block:
+            for el in block.find_all(True):
                 t = el.get("datetime") or el.get("title") or ""
                 m = ISO_RE.search(t)
                 if m:
@@ -126,10 +129,11 @@ def parse_html_zhongnianren(url, name):
             "id": full,
             "source_name": name,
             "source_url": full,
-            "title": text[:160],
-            "content": text,
+            "title": title,
+            "content": title,
             "published_at": pub,
         })
+    LOG.info("中年指南 HTML 回退抓到 %d 条 /posts/ 链接", len(out))
     return out
 
 
