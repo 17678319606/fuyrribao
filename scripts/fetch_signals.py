@@ -129,7 +129,7 @@ def parse_rss(cfg):
     except Exception as e:
         LOG.warning("RSS 抓取失败 %s: %s", name, e)
         return []
-    d = feedparser.parseString(raw)
+    d = feedparser.parse(raw)
     out = []
     for e in d.entries[: C.MAX_PER_SOURCE]:
         link = e.get("link") or e.get("id") or ""
