@@ -293,6 +293,26 @@ def main():
         candidates.sort(key=lambda x: x.get("published_at", ""), reverse=True)
         candidates = candidates[: C.MAX_CANDIDATES]
 
+    # 非冷启动也做总量护栏：防止某天多个源同时高产导致候选爆量、AI 分批调用过多。
+    # 均衡按源采样到 MAX_CANDIDATES，保证每个源都有代表、又不浪费 AI 额度。
+    if len(candidates) > C.MAX_CANDIDATES:
+        from collections import OrderedDict
+        orig = len(candidates)
+        groups = OrderedDict()
+        for s in candidates:
+            groups.setdefault(s.get("source_name", "未知"), []).append(s)
+        per = max(1, -(-C.MAX_CANDIDATES // len(groups)))
+        picked, leftover = [], []
+        for nm, items in groups.items():
+            if len(items) > per:
+                picked.extend(items[:per]); leftover.extend(items[per:])
+            else:
+                picked.extend(items)
+        if len(picked) < C.MAX_CANDIDATES and leftover:
+            picked.extend(leftover[: C.MAX_CANDIDATES - len(picked)])
+        candidates = picked[: C.MAX_CANDIDATES]
+        LOG.info("候选 %d 条超限，均衡采样至 %d 条（保多样性 + 控额度）", orig, len(candidates))
+
     # 写入今日候选
     today = C.date_str()
     cand_path = os.path.join(C.DATA_DIR, f"candidates-{today}.json")
