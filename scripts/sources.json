@@ -1,9 +1,10 @@
 [
   {
     "id": "zhongnianren",
-    "type": "html_zhongnianren",
-    "url": "https://zhongnianren.lixuehanwork.workers.dev/",
-    "name": "中年指南"
+    "type": "rss",
+    "url": "https://17678319606.github.io/tg-aggregator-cn-snapshot/zhongnianren/rss.xml",
+    "name": "中年指南",
+    "microblog": true
   },
   {
     "id": "cid",
