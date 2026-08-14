@@ -242,7 +242,7 @@ def render(report):
         f'<h1 class="shr-h1">副业日报 · {_esc(date)}</h1>\n'
         f'<div class="date shr-date">{_esc(date)}（北京时间）· 自动生成</div>\n'
         f'</header>\n'
-        f'{banner}{lede}'
+        f'{lede}'
     )
 
     for key, mtitle, cls in MODULES:
