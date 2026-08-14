@@ -29,6 +29,16 @@ import common as C
 
 LOG = C.get_logger()
 
+
+class _AbandonEndpoint(Exception):
+    """流式空响应 / 整体超时且内容无法解析：放弃当前端点，转下一个端点或非流式兜底。
+
+    默认情况下流式空响应会直接 raise 并逃逸出 _call_ai，导致末尾的「非流式兜底」
+    永远没机会执行；用此异常在端点内层捕获并 break 到下一端点，提升网关抖动时的自愈率。
+    """
+    pass
+
+
 SKILL_FILE = C.SKILL_FILE
 DATA_DIR = C.DATA_DIR
 
@@ -495,7 +505,8 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                         # 诊断：把原始响应前若干行打出来，便于判断是鉴权错误/Challenge/格式差异
                         snippet = " | ".join(raw_dump[:15])[:800]
                         LOG.error("流式响应为空，原始响应片段：%s", snippet)
-                        raise RuntimeError("流式响应为空（见上方原始片段）")
+                        # 不立刻崩溃：放弃当前端点，转非流式兜底 / 下一端点重试，提升网关抖动自愈率
+                        raise _AbandonEndpoint("流式响应为空（见上方原始片段）")
                     # 校验 JSON 完整性：流式偶发被网关/CF 截断会导致内容不完整，
                     # 需当作本次尝试失败并退避重试，而非直接返回残缺内容
                     extracted = _extract_json(content)
@@ -504,7 +515,7 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                         # 继续在同端点重试只会再浪费 15 分钟，直接放弃该端点/模式。
                         if time.time() > stream_deadline:
                             LOG.error("流式读取超时且内容无法解析为 JSON，放弃该端点")
-                            raise RuntimeError("stream wall-clock timeout with invalid JSON")
+                            raise _AbandonEndpoint("stream wall-clock timeout with invalid JSON")
                         wait = BACKOFF_BASE * (2 ** (attempt - 1))
                         LOG.warning("AI 返回无法解析为 JSON（可能流式被截断），本次尝试失败，%ds 后重试",
                                     wait)
@@ -539,6 +550,10 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     if _is_retryable_http(status):
                         # 尊重服务端 Retry-After（限流冷却），否则用指数退避
                         wait = _retry_after_seconds(e.response) or (BACKOFF_BASE * (2 ** (attempt - 1)))
+                        # EdgeOne 源站超时(524)/5xx：后端可能过载，给更长冷却让其恢复，
+                        # 避免 8s 内反复打满已过载的源站（网关抖动自愈的关键）。
+                        if 500 <= status < 600:
+                            wait = max(wait, 20)
                         LOG.warning("AI 接口返回 %s（base=%s），%ds 后重试", status, base_url, wait)
                         time.sleep(wait)
                     else:
@@ -549,6 +564,13 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     last_err = e
                     LOG.error("AI 返回结构异常：%s", e)
                     raise
+                except _AbandonEndpoint as e:
+                    # 流式空响应 / 整体超时且内容无效：放弃当前端点（及剩余代理），
+                    # 转下一个端点；若已是最后端点，则 _call_ai 末尾的非流式兜底会接管。
+                    last_err = e
+                    LOG.warning("放弃当前端点（base=%s，端点=%s）：%s —— 转下一端点/非流式兜底",
+                                base_url, proxy or "直连", e)
+                    break
     # 非流式兜底：流式（海外链路偶发被截断/524）所有 base_url+端点均失败后，
     # 用同一组 url 做一次整包返回请求，作为最后手段。仍失败才真正报错。
     if stream:
