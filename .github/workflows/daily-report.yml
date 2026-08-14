@@ -32,8 +32,8 @@ env:
   WP_USER: tougao
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   WP_CATEGORY_NAME: 日报
-  # —— AI 后端：首选 Google Gemini（OpenAI 兼容端点，海外 Runner 直连零跨境瓶颈）——
-  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta/openai/
+  # —— AI 后端：首选 Google Gemini（原生 API，适配 AI Studio 新版 AQ. Auth key）——
+  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
   AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   # 模型名放 Secret 里（可选）：不设则用默认 gemini-2.5-flash；以后换模型只改 Secrets.AI_MODEL，无需动代码
   AI_MODEL: ${{ secrets.AI_MODEL || 'gemini-2.5-flash' }}
@@ -172,6 +172,11 @@ jobs:
           # 仅靠 .gitignore 排除临时态 source_status.json / last_posted.json）
           git add state/ || true
           git diff --cached --quiet || git commit -m "daily: $(TZ=Asia/Shanghai date +%F) [heartbeat]"
+          # 清理运行时在已跟踪 data/ 上留下的未暂存变更（data/ 本应被 .gitignore 隔离，
+          # 但历史提交中仍有旧 candidates/report 文件，导致 git pull --rebase 因 unstaged
+          # changes 失败）。丢弃这些运行时产物不影响业务（它们每日由 runner 重新生成）。
+          git reset --hard
+          git clean -fd
           # 推送前先 rebase 远端：规避并行/历史漂移导致的 non-fast-forward
           for j in 1 2 3; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push; then
