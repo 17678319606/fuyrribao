@@ -101,6 +101,9 @@ CSS = """
 .shr-ev a{color:#2563eb;text-decoration:none;font-weight:600;margin:0 3px;}
 .shr-ev a:hover{text-decoration:underline;}
 
+/* 文字链（无 href，保留视觉权重） */
+.shr-wrap .text-link{color:#2563eb;font-weight:600;}
+
 /* 页脚 */
 .shr-footer{margin-top:48px;text-align:center;color:#9ca3af;font-size:12px;padding-top:20px;border-top:1px solid #e5e7eb;}
 
@@ -198,36 +201,40 @@ def render_item(it, modcls):
         f'<h3 class="it-title shr-it-title">{title}</h3>\n'
         f'<div class="it-meta shr-it-meta">'
         f'<span class="src-pill shr-src-pill">{src_name}</span>'
-        f'<a class="read-btn shr-read-btn" href="{src_url}" target="_blank" rel="noopener noreferrer">阅读原文 →</a>'
+        f'<span class="read-hint" style="font-size:12px;color:#9ca3af;">来源文字链 · 阅读原文请返回对应平台</span>'
         f'</div>\n'
         f'{rows}'
         f'</article>'
     )
 
 
+def _strip_links(html):
+    """后处理：把所有 <a href="...">text</a> 转换为不可点击的 <span class="text-link">text</span>，
+    并抹掉任何裸 http/https URL，确保正文不出现可点击链接与可见网址。
+    """
+    import re
+    # 1) 去除 <a> 标签的 href/target/rel 属性，保留文本
+    html = re.sub(r'<a\b[^>]*?href="[^"]*"[^>]*?>(.*?)</a>',
+                  r'<span class="text-link">\1</span>', html, flags=re.S | re.I)
+    html = re.sub(r'<a\b[^>]*?>(.*?)</a>', r'<span class="text-link">\1</span>',
+                  html, flags=re.S | re.I)
+    # 2) 把可见的裸 URL 替换为空（通常只剩括号或空白）
+    html = re.sub(r'https?://[^\s<>"\')]+', '', html, flags=re.I)
+    # 3) 清理可能留下的空括号、多余空白
+    html = re.sub(r'\(\s*\)', '', html)
+    html = re.sub(r'[ ]{2,}', ' ', html)
+    return html
+
+
 def render(report):
-    """将完整 report JSON 渲染为带内联样式的 HTML 片段。"""
+    """将完整 report JSON 渲染为带内联样式的 HTML 片段（正文不含可点击链接与裸 URL）。"""
     date = report.get("date", C.date_str())
     total = sum(len(report["modules"].get(k, [])) for k, _, _ in MODULES)
 
-    ai_failed = report.get("ai_failed", False)
-    if ai_failed:
-        banner = (
-            '<div class="lede shr-lede" style="background:#fff7ed;border-color:#fed7aa;'
-            'border-left-color:#ea580c;color:#9a3412;">⚠️ <strong>AI 精筛引擎暂不可用</strong>'
-            '（ai.jinbufenzi.com 域名解析失败），本篇为「今日信号速览」——原始采集信号未经 AI 筛选，'
-            '点击卡片可阅读原文。修复 AI 端点后将自动恢复 AI 精筛日报。</div>\n'
-        )
-        lede = (
-            f'<div class="lede shr-lede">今日共采集 <strong>{total}</strong> 条信号'
-            f'（未经 AI 筛选，全部归入「项目机会库」）。</div>\n'
-        )
-    else:
-        banner = ""
-        lede = (
-            f'<div class="lede shr-lede">今日精选 <strong>{total}</strong> 条内容，'
-            f'按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>\n'
-        )
+    lede = (
+        f'<div class="lede shr-lede">今日精选 <strong>{total}</strong> 条内容，'
+        f'按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>\n'
+    )
 
     body = (
         f'<header class="top shr-header">\n'
@@ -270,9 +277,7 @@ def render(report):
         for u in ds.get("evidence", []):
             sn, ti = url_map.get(u, ("", ""))
             label = ti or sn or _domain(u)
-            ev_parts.append(
-                f'<a href="{_esc(u)}" target="_blank" rel="noopener noreferrer">'
-                f'{_esc(label)}</a>')
+            ev_parts.append(f'<span class="text-link">{_esc(label)}</span>')
         ev_html = " · ".join(ev_parts)
 
         body += (
@@ -283,13 +288,14 @@ def render(report):
             f'</div></section>\n'
         )
 
-    return (
+    html = (
         f'<style>{CSS}</style>\n'
         f'<div class="wrap shr-wrap">\n'
         f'{body}\n'
         f'<footer class="shr-footer">本文由 GitHub Actions 自动生成并发布。</footer>\n'
         f'</div>'
     )
+    return _strip_links(html)
 
 
 def _short(url, n=64):
@@ -384,8 +390,11 @@ def main():
     today = C.date_str()
     report = C.load_json(os.path.join(C.DATA_DIR, f"report-{today}.json"), {})
     if not report:
-        LOG.info("无日报数据，跳过发布。")
-        return
+        LOG.error("无日报数据，跳过发布。")
+        raise SystemExit("no report data")
+    if report.get("ai_failed"):
+        LOG.error("report 为降级/AI 失败状态，按策略不发布非 AI 内容。")
+        raise SystemExit("ai failed report rejected")
     total = sum(len(report.get("modules", {}).get(k, [])) for k, _, _ in MODULES)
     ds = report.get("daily_summary", {})
     if total == 0 and not ds.get("methodology"):
