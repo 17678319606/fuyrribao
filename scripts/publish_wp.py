@@ -53,6 +53,9 @@ CSS = """
 .m2 .shr-mtag{background:#2563eb;}.m2 .shr-mtitle{color:#2563eb;}
 .m3 .shr-mtag{background:#7c3aed;}.m3 .shr-mtitle{color:#7c3aed;}
 
+/* 模块副标题 */
+.shr-msub{color:#6b7280;font-size:14px;margin:-6px 0 18px;line-height:1.6;font-weight:400;}
+
 /* 卡片 */
 .shr-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;
   padding:24px 28px;margin-bottom:20px;
@@ -65,6 +68,13 @@ CSS = """
 .shr-it-meta{font-size:13px;color:#6b7280;margin:0 0 16px!important;padding-bottom:14px;border-bottom:1px solid #f3f4f6;line-height:1.5;}
 .shr-it-meta a{color:#2563eb;text-decoration:none;font-weight:600;}
 .shr-it-meta a:hover{text-decoration:underline;}
+
+/* 来源 pill + 阅读按钮 */
+.shr-src-pill{display:inline-block;background:#eef2ff;color:#4338ca;font-size:12px;font-weight:700;
+  padding:3px 10px;border-radius:999px;margin-right:10px;vertical-align:middle;letter-spacing:.2px;}
+.shr-read-btn{display:inline-block;background:#2563eb;color:#fff!important;font-size:13px;font-weight:600;
+  padding:4px 12px;border-radius:8px;text-decoration:none!important;vertical-align:middle;}
+.shr-read-btn:hover{background:#1d4ed8;text-decoration:none!important;}
 
 /* 字段：标签明显小于正文、颜色区分 */
 .shr-field-row{margin-top:18px;}
@@ -117,6 +127,13 @@ MODULES = [
     ("growth_operations",     "增长运营",   "m2"),
     ("views_insights",        "观点心法",   "m3"),
 ]
+
+# 模块副标题（显示在模块标题下方，帮助读者快速理解该模块内容）
+MODULE_SUBTITLE = {
+    "project_opportunities": "能照着做的赚钱项目 / 案例 / 工具",
+    "growth_operations": "流量增长、转化与冷启动实操",
+    "views_insights": "赚钱存钱的心态、方法与踩坑复盘",
+}
 
 # ── 创业画布字段定义（顺序=显示顺序）──
 # (json_key, display_label)
@@ -179,8 +196,8 @@ def render_item(it, modcls):
         f'<article class="card shr-card">\n'
         f'<h3 class="it-title shr-it-title">{title}</h3>\n'
         f'<div class="it-meta shr-it-meta">'
-        f'来源：{src_name} · '
-        f'<a href="{src_url}" target="_blank" rel="noopener noreferrer">阅读原文 →</a>'
+        f'<span class="src-pill shr-src-pill">{src_name}</span>'
+        f'<a class="read-btn shr-read-btn" href="{src_url}" target="_blank" rel="noopener noreferrer">阅读原文 →</a>'
         f'</div>\n'
         f'{rows}'
         f'</article>'
@@ -198,7 +215,7 @@ def render(report):
         f'<h1 class="shr-h1">副业日报 · {_esc(date)}</h1>\n'
         f'<div class="date shr-date">{_esc(date)}（北京时间）· 自动生成</div>\n'
         f'</header>\n'
-        f'<div class="lede shr-lede">今日共筛出 <strong>{total}</strong> 条增量信号，'
+        f'<div class="lede shr-lede">今日精选 <strong>{total}</strong> 条内容，'
         f'按「项目机会库 / 增长运营 / 观点心法」分模块呈现。</div>\n'
     )
 
@@ -214,6 +231,7 @@ def render(report):
             f'<h2 class="mtitle shr-mtitle">{mtitle}</h2>'
             f'<span class="mcount shr-mcount">精选 {len(items)}</span>'
             f'</div>\n'
+            f'<p class="msub shr-msub">{_esc(MODULE_SUBTITLE.get(key, ""))}</p>\n'
             f'{cards}\n'
             f'</section>\n'
         )
