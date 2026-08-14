@@ -289,8 +289,21 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
     mode = "stream" if stream else "non-stream"
 
     LOG.info("Gemini 原生请求 [base=%s, model=%s] (%s)", base_url, model_id, mode)
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=stream)
-    resp.raise_for_status()
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=stream)
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 0
+        body = ""
+        try:
+            body = (e.response.text or "")[:400]
+        except Exception:
+            pass
+        # AI Studio 新版 AQ. key 常见硬失败：预付费额度耗尽（非限流，充值/绑卡前无解）
+        if code == 429 and any(k in body.lower() for k in ("prepayment", "credits", "depleted")):
+            LOG.error("Gemini 原生调用被拒：预付费额度已耗尽（prepayment credits depleted），将退回兜底网关。"
+                      "请在 Google AI Studio 项目 94038486169 充值或绑定计费账户后自动恢复。")
+        raise
 
     if not stream:
         data = resp.json()
@@ -757,7 +770,7 @@ def main():
     # AI 配置与候选端点
     base_urls = _parse_base_urls()
     api_key = os.environ.get("AI_API_KEY", "")
-    model = os.environ.get("AI_MODEL", "gemini-2.5-flash-latest")
+    model = os.environ.get("AI_MODEL", "gemini-flash-latest")
     if _force_non_stream():
         LOG.info("强制非流式模式：所有 AI 调用使用整包返回（可在 Secret AI_FORCE_NON_STREAM=0 关闭）")
 
