@@ -95,7 +95,9 @@ def _http_get(url, headers=None, timeout=(15, 90), retries=2, backoff=5):
                 time.sleep(wait)
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
-            if status == 429 or 500 <= status < 600:
+            # 连接层失败（无响应体，status=0）/限流 429/5xx 均可重试；
+            # 4xx 其他（鉴权/参数/404）才是真正非重试类，直接放弃。
+            if status == 0 or status == 429 or 500 <= status < 600:
                 last_err = e
                 wait = backoff * attempt
                 LOG.warning("抓取 HTTP %s %s（第 %d/%d 次），%ds 后重试",
