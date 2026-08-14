@@ -16,7 +16,7 @@
   { "id": "v2ex", "type": "rss", "url": "https://www.v2ex.com/index.xml", "name": "V2EX" },
   { "id": "sspai", "type": "rss", "url": "https://sspai.com/feed", "name": "少数派" },
   { "id": "hn", "type": "rss", "url": "https://hnrss.org/frontpage", "name": "Hacker News" },
-  { "id": "reddit_sideproject", "type": "reddit_json", "url": "https://www.reddit.com/r/SideProject/.json?limit=25", "name": "Reddit r/SideProject" },
+  { "id": "reddit_sideproject", "type": "reddit_json", "url": "https://www.reddit.com/r/SideProject/.json?limit=100", "name": "Reddit r/SideProject" },
   { "id": "producthunt", "type": "rss", "url": "https://www.producthunt.com/feed", "name": "Product Hunt" },
   { "id": "indiehackers", "type": "rss", "url": "https://www.indiehackers.com/feed.xml", "name": "IndieHackers" }
 ]
