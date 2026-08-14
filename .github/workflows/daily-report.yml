@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────
 # 主触发：用户 1H1G 宝塔服务器 19:00 cron → 调 GitHub Dispatch API（见 trigger_daily.sh）
 # 备触发：GitHub 自带定时 19:40 / 20:10（北京时间）兜底，仅当主触发失败/未跑时补发
-# 防重复：每次运行先用 WP REST 查「今日是否已发布」，已发布则直接跳过（早退，省额度+绝不双发）
+# 防重复：派发（手动/宝塔）运行覆盖更新同日文章（链接不变）；定时备用仅在无同日文章时补生成（省额度+绝不双发）
 # 防 GitHub 60天停用：每次运行都提交 state/heartbeat.txt，保证仓库每日有 push 活动
 # 失败告警：企业微信机器人（workflow 级 failure 步骤）+ 服务器侧双告警（trigger_daily.sh）
 # 密钥全部走 GitHub Secrets / 环境变量，绝不硬编码敏感信息。
@@ -66,7 +66,7 @@ jobs:
           out = os.environ.get("GITHUB_OUTPUT", "/dev/null")
           BJ = datetime.timezone(datetime.timedelta(hours=8))
           today = datetime.datetime.now(BJ).strftime("%Y-%m-%d")
-          force = os.environ.get("FORCE_UPDATE") == "1"
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
           try:
               wp = os.environ["WP_URL"].rstrip("/")
               auth = {"Authorization": "Basic " + base64.b64encode(
@@ -77,12 +77,15 @@ jobs:
               r.raise_for_status()
               for p in r.json():
                   t = p.get("title", {}).get("rendered", "")
-                  if today in t and "副业日报" in t:
-                      if force:
-                          print("检测到今日文章但 FORCE=1，将继续覆盖更新。")
+                  pdate = (p.get("date") or "")[:10]
+                  if "副业日报" in t and (today in t or pdate == today):
+                      if event != "schedule":
+                          # 派发（手动 / 宝塔触发）运行：允许覆盖更新同日文章（链接不变）
+                          print("检测到今日文章（id=%s），派发运行将继续覆盖更新。" % p["id"])
                           open(out, "a").write("skip=0\n")
                           sys.exit(0)
-                      print("今日文章已存在（id=%s），跳过生成以省额度。" % p["id"])
+                      # 定时备用运行：今日已有文章则跳过，避免覆盖主运行产出、省额度
+                      print("今日文章已存在（id=%s），定时备用跳过生成以省额度。" % p["id"])
                       open(out, "a").write("skip=1\n")
                       sys.exit(0)
           except Exception as e:
