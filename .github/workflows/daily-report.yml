@@ -179,11 +179,19 @@ jobs:
           # changes 失败）。丢弃这些运行时产物不影响业务（它们每日由 runner 重新生成）。
           git reset --hard
           git clean -fd
-          # 推送前先 rebase 远端：规避并行/历史漂移导致的 non-fast-forward
+          # 推送前先 rebase 远端：规避并行/历史漂移导致的 non-fast-forward。
+          # 若 rebase 冲突（多见于 run 进行中有人推送代码导致 state/ 被并发改动），
+          # 对 state/ 取「本次运行」版本（更权威：反映本 run 的去重/心跳），其余取远端，继续 rebase。
+          git fetch origin
           for j in 1 2 3; do
-            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push; then
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
               echo "✅ 状态已回写仓库"
               break
+            fi
+            if [ -n "$(git ls-files -u)" ]; then
+              git checkout --theirs -- state/heartbeat.txt state/seen.json 2>/dev/null || true
+              git add -A 2>/dev/null || true
+              GIT_EDITOR=true git rebase --continue 2>/dev/null || true
             fi
             echo "git push 第 $j/3 次失败（可能远端已更新），5s 后重试…"
             sleep 5
