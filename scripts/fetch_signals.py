@@ -112,7 +112,13 @@ def parse_html_zhongnianren(url, name):
         seen.add(full)
         # 就近消息块（li/article/div/section/p）文本作为标题与正文，锚文本兜底
         block = a.find_parent(["li", "article", "div", "section", "p"]) or a.parent
-        title = (block.get_text(" ", strip=True) if block else "") or a.get_text(" ", strip=True)
+        anchor_text = a.get_text(" ", strip=True)
+        if block:
+            # 去掉锚文本本身（如“阅读原文 →”），保留消息正文作标题
+            block_text = block.get_text(" ", strip=True)
+            title = block_text.replace(anchor_text, "", 1).strip()
+        else:
+            title = anchor_text
         if not title:
             title = full
         if len(title) > 180:
