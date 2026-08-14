@@ -14,8 +14,8 @@ SEEN_FILE = os.path.join(STATE_DIR, "seen.json")
 # —— 可调参数 ——
 RETENTION_DAYS = 60          # 数据文件 / 去重表的保留天数（到期自动清理）
 COLD_START_MAX_PER_SOURCE = 15  # 冷启动（首次运行）每个源最多取多少条，避免首期爆量
-MAX_PER_SOURCE = 80          # 每个源每次最多保留多少条（RSS 受 Feed 本身条数限制；HTML/Reddit/Diff 类可拉更多）
-MAX_CANDIDATES = 300         # 单日候选上限（data/ 已 gitignore，不进 git 历史，仓库容量零影响）
+MAX_PER_SOURCE = 100         # 每个源每次最多保留多少条（RSS 受 Feed 本身条数限制；HTML/Reddit/Diff 类可拉更多）
+MAX_CANDIDATES = 600         # 单日候选上限（data/ 已 gitignore，不进 git 历史，仓库容量零影响）
 
 BJ = datetime.timezone(datetime.timedelta(hours=8))
 
