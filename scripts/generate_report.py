@@ -56,13 +56,13 @@ def _req_timeout():
 def _force_non_stream():
     """是否强制所有 AI 调用走非流式。
 
-    默认强制非流式：GitHub Actions（海外 Runner）→ 国内网关的流式 SSE
-    容易被国际链路截断/超时，整包返回更稳定。用户可设置 AI_FORCE_NON_STREAM=0 关闭。
+    默认流式优先：GitHub Actions（海外 Runner）→ 国内网关场景下，非流式需等
+    网关把整包（数千 token）生成完才回传，EdgeOne 等源站响应易超时（524）；
+    流式边生成边回传，持续吐数据，不会触发 origin response timeout，更稳更快。
+    仅在 AI_FORCE_NON_STREAM=1 时强制非流式（作为流式全失败后的兜底已内置）。
     """
     raw = os.environ.get("AI_FORCE_NON_STREAM", "").strip().lower()
-    if raw in ("0", "false", "no", "off"):
-        return False
-    return True
+    return raw in ("1", "true", "yes", "on")
 
 
 def _trim_signals_for_prompt(signals, max_content=400):
@@ -255,6 +255,20 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
     mode = "stream" if stream else "non-stream"
     last_err = None
     timeout = _req_timeout()
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "temperature": 0.5,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "stream": stream,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
 
     for base_url in base_urls:
         url = base_url.rstrip("/") + "/chat/completions"
@@ -264,21 +278,6 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
         except Exception:
             _host = "ai.jinbufenzi.com"
         _install_dns_patch(_host)
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": model,
-            "temperature": 0.5,
-            "max_tokens": MAX_OUTPUT_TOKENS,
-            "stream": stream,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        }
 
         for ci, proxy in enumerate(cands):
             proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -380,6 +379,26 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     last_err = e
                     LOG.error("AI 返回结构异常：%s", e)
                     raise
+    # 非流式兜底：流式（海外链路偶发被截断/524）所有 base_url+端点均失败后，
+    # 用同一组 url 做一次整包返回请求，作为最后手段。仍失败才真正报错。
+    if stream:
+        LOG.warning("流式多 base_url/端点均失败，尝试非流式兜底（整包返回）一次…")
+        nb_payload = dict(payload)
+        nb_payload["stream"] = False
+        for base_url in base_urls:
+            url = base_url.rstrip("/") + "/chat/completions"
+            try:
+                r2 = requests.post(url, headers=headers, json=nb_payload,
+                                   proxies=None, timeout=timeout)
+                r2.raise_for_status()
+                msg = (r2.json().get("choices", [{}])[0]
+                       .get("message", {}).get("content", ""))
+                if msg and _extract_json(msg) is not None:
+                    LOG.info("非流式兜底成功（base=%s，约 %d 字）", base_url, len(msg))
+                    return msg
+                LOG.warning("非流式兜底返回内容无法解析为 JSON（base=%s）", base_url)
+            except Exception as e:
+                LOG.warning("非流式兜底请求失败（base=%s）：%s", base_url, e)
     raise RuntimeError(
         f"所有候选 base_url（{len(base_urls)}）与端点均失败，总耗时 %.1fs，最后错误：{last_err}" % (
             time.time() - start,))
@@ -446,6 +465,23 @@ def _validate(report):
     for key in ("project_opportunities", "growth_operations", "views_insights"):
         assert key in mods, f"缺少模块 {key}"
         assert isinstance(mods[key], list), f"{key} 不是数组"
+        # 容错：AI 偶发把某条 item 返回成纯字符串（而非对象），清洗为合格字典，
+        # 否则 render_item 调 .get() 会 AttributeError 导致整跑崩溃（v4 run 即此坑）。
+        cleaned = []
+        for idx, it in enumerate(mods[key]):
+            if isinstance(it, dict):
+                it.setdefault("title", "")
+                it.setdefault("source_name", "")
+                it.setdefault("source_url", "")
+                it.setdefault("signal", "")
+                cleaned.append(it)
+            elif isinstance(it, str):
+                LOG.warning("模块 %s 第 %d 条为字符串（非对象），已清洗为标题卡片", key, idx)
+                cleaned.append({"title": it[:200], "source_name": "",
+                                "source_url": "", "signal": ""})
+            else:
+                LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
+        mods[key] = cleaned
     assert "daily_summary" in report, "缺少 daily_summary"
     ds = report["daily_summary"]
     assert isinstance(ds, dict), "daily_summary 不是对象"
@@ -492,19 +528,23 @@ def _screen_one_batch(batch, base_urls, api_key, model, system_prompt):
 
 def screen_signals(signals, base_urls, api_key, model, system_prompt):
     """分批筛选：打乱后分桶，每桶让 AI 挑精华，汇总按分数取 TopN。
-    保证每个内容源都有机会被看到，解决『候选被截断丢弃』导致的丰富度下降。"""
+    保证每个内容源都有机会被看到；筛选失败的批次保留原始候选，避免整批丢失
+    导致内容丰富度骤降（降级为「未筛选直送」，最终仍受 SCREEN_FINAL_CAP 约束）。"""
     import random
     random.shuffle(signals)  # 打乱，使每批源混合，避免整批同源于是漏选
     batches = [signals[i:i + SCREEN_BATCH] for i in range(0, len(signals), SCREEN_BATCH)]
     by_id = {s["id"]: s for s in signals if s.get("id")}
     scored = {}
+    skipped_raw = []   # 筛选失败的批次：保留原始候选，降级为未筛选直送
     t0 = time.time()
     for bi, batch in enumerate(batches):
         bs = time.time()
         try:
             picks = _screen_one_batch(batch, base_urls, api_key, model, system_prompt)
         except Exception as e:
-            LOG.warning("分批筛选第 %d/%d 批失败，跳过该批：%s", bi + 1, len(batches), e)
+            LOG.warning("分批筛选第 %d/%d 批失败，该批 %d 条保留为未筛选候选：%s",
+                        bi + 1, len(batches), len(batch), e)
+            skipped_raw.extend(batch)
             continue
         LOG.info("分批筛选第 %d/%d 批完成，本批耗时 %.1fs，返回 %d 条",
                  bi + 1, len(batches), time.time() - bs, len(picks))
@@ -520,10 +560,21 @@ def screen_signals(signals, base_urls, api_key, model, system_prompt):
             if prev is None or sc > prev[0]:
                 scored[pid] = (sc, p.get("reason", ""))
     ranked = sorted(scored.items(), key=lambda kv: kv[1][0], reverse=True)
-    kept = [by_id[pid] for pid, _ in ranked[:SCREEN_FINAL_CAP]]
-    LOG.info("分批筛选完成：%d 候选 → %d 批 → 汇总 %d 条精华 → 取前 %d 条进生成，总耗时 %.1fs",
-             len(signals), len(batches), len(scored), len(kept), time.time() - t0)
-    return kept
+    kept = [by_id[pid] for pid, _ in ranked]
+    # 合并精选 + 未筛选候选，按 id 去重，最终统一截断到安全上限
+    seen_ids, merged = set(), []
+    for s in kept + skipped_raw:
+        sid = s.get("id")
+        if sid and sid in seen_ids:
+            continue
+        if sid:
+            seen_ids.add(sid)
+        merged.append(s)
+    merged = merged[:SCREEN_FINAL_CAP]
+    LOG.info("分批筛选完成：%d 候选 → %d 批 → 精选 %d + 未筛选 %d → 合并 %d → 取前 %d 条进生成，总耗时 %.1fs",
+             len(signals), len(batches), len(kept), len(skipped_raw), len(merged),
+             len(merged), time.time() - t0)
+    return merged
 
 
 def main():
@@ -608,11 +659,12 @@ def main():
 
     # 4) 调用 AI（外层生成级重试：应对空生成 / 解析失败 / 结构不完整）
     #    AI 失败直接抛 SystemExit → workflow 失败，不发布非 AI 内容。
-    #    最终日报生成使用 non-stream：大输出场景下整包返回更稳定，避免流式截断。
+    #    最终生成同样走流式（海外→国内链路流式更稳，避免整包等待触发 EdgeOne 524）；
+    #    若流式全失败，_call_ai 内部会自动降级一次非流式整包兜底。
     content = None
     for gen in range(1, GEN_RETRIES + 1):
         try:
-            content = _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=False)
+            content = _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
         except Exception as e:
             LOG.error("AI 调用失败（第 %d/%d 次生成，已用 %.1fs）：%s",
                       gen, GEN_RETRIES, time.time() - overall_t0, e)
