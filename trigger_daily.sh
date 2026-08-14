@@ -102,26 +102,38 @@ PAT="$(tr -d '[:space:]' < "$PAT_FILE")"
 [ -n "$PAT" ] || { alert "GitHub PAT 为空，请检查 $PAT_FILE"; exit 1; }
 AUTH="Authorization: Bearer $PAT"
 API="https://api.github.com/repos/$REPO"
+WP_SITE="https://dajiayouxuan.com"
 
-# ---------- 今日已成功则跳过（防重复 dispatch） ----------
+# ---------- 去重：直接查 WP 今日是否已有副业日报 ----------
+# 不再用 GitHub 运行 success 判断，因为 workflow 可能因去重早退而跳过发布。
 TODAY=$(date +%F)
-SINCE=$(date -d "$TODAY 00:00:00" -u +%Y-%m-%dT%H:%M:%SZ)
-already=$(curl -s -H "$AUTH" "$API/actions/runs?per_page=50&conclusion=success" \
+TODAY_CN=$(date '+%Y年%-m月%-d日')
+already=$(curl -s "$WP_SITE/wp-json/wp/v2/posts?search=%E5%89%AF%E4%B8%9A%E6%97%A5%E6%8A%A5&per_page=10&_fields=date,title,status" \
   | python3 -c "
-import sys, json
+import sys, json, re
 try:
     d = json.load(sys.stdin)
 except Exception:
     print('0'); sys.exit()
-since = '$SINCE'
-for r in d.get('workflow_runs', []):
-    if r.get('created_at', '') >= since:
+today = '$TODAY'
+today_cn = '$TODAY_CN'
+for p in d:
+    if p.get('status') != 'publish':
+        continue
+    rendered = p.get('title', {}).get('rendered', '')
+    post_date = p.get('date', '')[:10]
+    if post_date == today:
+        print('1'); break
+    if today_cn in rendered or today.replace('-', '年', 1).replace('-', '月', 1) + '日' in rendered:
+        print('1'); break
+    m = re.search(r'(\d{1,2})\s*月\s*(\d{1,2})\s*日', rendered)
+    if m and today.endswith('-%02d-%02d' % (int(m.group(1)), int(m.group(2)))) and '副业日报' in rendered:
         print('1'); break
 else:
     print('0')
 " 2>/dev/null)
 if [ "$already" = "1" ]; then
-  log "今日已有成功运行，跳过 dispatch（防重复）。"
+  log "WP 今日已有副业日报，跳过 dispatch（防重复）。"
   exit 0
 fi
 
