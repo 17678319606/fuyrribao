@@ -2,14 +2,17 @@
 """步骤3：把日报 JSON 渲染成文章 HTML，经 WordPress REST API 直接发布（非草稿）。
 密钥走环境变量（由 GitHub Secrets 注入），绝不硬编码。
 
-v2 排版规范（基于创业画布）：
-- 每个条目为独立卡片，带阴影和圆角
-- 字段按创业画布 9 维度呈现：信号/趋势 → 目标客户 → 价值主张 → 建议怎么做/MVP
-  → 获客渠道 → 变现说明与数据表现 → 启动成本 → 可复制性/壁垒 → 副业视角
-- 每个字段用 H3（带「：」号）+ 独立段落；**留空的字段不展示标题也不占位**
-- 来源/证据均为文字链（标题或来源名，不是裸 URL）
-- 副业视角单独用紫色引用块突出
-- 内联完整 CSS，确保 WordPress 主题不覆盖样式
+v3 排版规范（卡片式 + 清晰层级）：
+- 每个条目为独立卡片，圆角 + 阴影 + 边框，与背景明显区分
+- 卡片内层级：
+  ・卡片标题 20px/800 字重，最突出
+  ・来源/元信息 13px 灰色，带分隔线
+  ・字段标签 14px/700 字重，带色点前缀，明显小于正文标题
+  ・字段正文 15.5px/400 字重，1.85 行高，阅读舒适
+- 模块标题用色块+大字号，含精选计数徽章
+- 副业视角用紫色引用块单独突出
+- 每日总结用黄色强调卡片
+- 内联完整 CSS，高优先级选择器 + !important 防止 WP 主题覆盖
 - 响应式：移动端（≤480px）自动调整字号/间距/内边距，杜绝溢出
 """
 import os
@@ -26,96 +29,86 @@ LOG = C.get_logger()
 
 # ── 完整内联 CSS（高优先级选择器 + !important 防止 WP 主题覆盖）──
 CSS = """
-.shr-wrap{max-width:780px;margin:0 auto;padding:28px 18px 56px;
+/* ── 副业日报 v3 卡片式排版 ── */
+.shr-wrap{max-width:760px;margin:0 auto;padding:32px 20px 60px;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
-  line-height:1.8;color:#1f2329;background:transparent;box-sizing:border-box;}
+  line-height:1.75;color:#111827;background:#f9fafb;box-sizing:border-box;}
 .shr-wrap *,.shr-wrap *::before,.shr-wrap *::after{box-sizing:border-box;}
 
-/* ── 头部 ── */
-.shr-header{border-bottom:3px solid #e8543f;padding-bottom:16px;margin-bottom:24px;}
-.shr-kicker{color:#e8543f;font-weight:700;letter-spacing:2px;font-size:12px;text-transform:uppercase;}
-.shr-h1{font-size:28px;margin:6px 0 2px;font-weight:900;line-height:1.3;color:#1f2329;}
-.shr-date{color:#6b7280;font-size:13px;}
-.shr-lede{background:#fef3ef;border-left:4px solid #e8543f;border-radius:0 10px 10px 0;
-  padding:14px 18px;font-size:15px;color:#7a2c20;margin:20px 0 28px;line-height:1.75;}
+/* 头部 */
+.shr-header{text-align:center;padding-bottom:24px;border-bottom:3px solid #e8543f;margin-bottom:28px;}
+.shr-kicker{color:#e8543f;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;}
+.shr-h1{font-size:32px;margin:10px 0 6px;font-weight:900;line-height:1.2;color:#111827;}
+.shr-date{color:#6b7280;font-size:14px;}
+.shr-lede{background:#fff;border:1px solid #fee2e2;border-left:4px solid #e8543f;border-radius:12px;
+  padding:16px 20px;font-size:15px;color:#7f1d1d;margin:24px 0 32px;line-height:1.75;}
 
-/* ── 模块标题 ── */
-.shr-mod{margin:40px 0 0;}
-.shr-mhead{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
-.shr-mtag{width:8px;height:24px;border-radius:4px;flex-shrink:0;}
-.shr-mtitle{font-size:22px;font-weight:800;margin:0;line-height:1.3;letter-spacing:-.2px;}
-.shr-mcount{color:#6b7280;font-size:12px;margin-left:auto;flex-shrink:0;}
-.shr-mod.m1 .shr-mtag{background:#e8543f;}.shr-mod.m1 .shr-mtitle{color:#e8543f;}
-.shr-mod.m2 .shr-mtag{background:#2f6fed;}.shr-mod.m2 .shr-mtitle{color:#2f6fed;}
-.shr-mod.m3 .shr-mtag{background:#7c5cff;}.shr-mod.m3 .shr-mtitle{color:#7c5cff;}
+/* 模块标题 */
+.shr-mod{margin:44px 0 0;}
+.shr-mhead{display:flex;align-items:center;gap:10px;margin-bottom:20px;}
+.shr-mtag{width:6px;height:28px;border-radius:3px;flex-shrink:0;}
+.shr-mtitle{font-size:24px;font-weight:800;margin:0;line-height:1.3;letter-spacing:-.3px;}
+.shr-mcount{color:#6b7280;font-size:13px;margin-left:auto;flex-shrink:0;background:#fff;padding:4px 10px;border-radius:20px;border:1px solid #e5e7eb;}
+.m1 .shr-mtag{background:#dc2626;}.m1 .shr-mtitle{color:#dc2626;}
+.m2 .shr-mtag{background:#2563eb;}.m2 .shr-mtitle{color:#2563eb;}
+.m3 .shr-mtag{background:#7c3aed;}.m3 .shr-mtitle{color:#7c3aed;}
 
-/* ── 卡片 ── */
-.shr-card{background:#fff;border:1px solid #eaecef;border-radius:14px;
-  padding:24px 26px;margin-bottom:18px;
-  box-shadow:0 2px 12px rgba(17,24,39,.06);
-  overflow:hidden;word-wrap:break-word;overflow-wrap:break-word;
-  transition:box-shadow .2s ease,transform .2s ease;}
-.shr-card:hover{box-shadow:0 4px 18px rgba(17,24,39,.1);transform:translateY(-1px);}
+/* 卡片 */
+.shr-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;
+  padding:24px 28px;margin-bottom:20px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04),0 6px 16px rgba(0,0,0,.04);
+  overflow:hidden;word-wrap:break-word;overflow-wrap:break-word;}
 .shr-card:last-child{margin-bottom:0;}
 
-.shr-it-title{font-size:21px;font-weight:800;color:#1a1a2e;margin:0 0 8px;line-height:1.4;
-  letter-spacing:-.2px;padding-bottom:0!important;}
-.shr-it-meta{font-size:12.5px;color:#6b7280;margin:0 0 14px;
-  padding-bottom:12px!important;border-bottom:1px solid #eaecef;line-height:1.5;}
-.shr-it-meta a{color:#2f6fed;text-decoration:none;font-weight:600;}
+/* 卡片标题 / 来源 */
+.shr-it-title{font-size:20px;font-weight:800;color:#111827;margin:0 0 10px!important;line-height:1.4;letter-spacing:-.2px;}
+.shr-it-meta{font-size:13px;color:#6b7280;margin:0 0 16px!important;padding-bottom:14px;border-bottom:1px solid #f3f4f6;line-height:1.5;}
+.shr-it-meta a{color:#2563eb;text-decoration:none;font-weight:600;}
 .shr-it-meta a:hover{text-decoration:underline;}
 
-/* ── 画布字段 H3 + 正文 ── */
-.shr-field{font-size:16px;font-weight:700;margin:18px 0 6px!important;
-  padding-left:12px!important;border-left:4px solid #e8543f;
-  line-height:1.45!important;display:block;letter-spacing:-.1px;}
-.shr-field.m1{border-color:#e8543f!important;color:#d63d28!important;}
-.shr-field.m2{border-color:#2f6fed!important;color:#2257d6!important;}
-.shr-field.m3{border-color:#7c5cff!important;color:#6b46e0!important;}
-.shr-field.per{border-color:#7c5cff!important;color:#5b3fa0!important;}
+/* 字段：标签明显小于正文、颜色区分 */
+.shr-field-row{margin-top:18px;}
+.shr-field-row:first-of-type{margin-top:0;}
+.shr-field-label{font-size:14px;font-weight:700;margin:0 0 6px!important;line-height:1.4;color:#4b5563;}
+.shr-field-label::before{content:"▪";margin-right:8px;color:inherit;}
+.shr-field-text{font-size:15.5px;color:#374151;margin:0!important;line-height:1.85;}
+/* 模块色系 */
+.m1 .shr-field-label{color:#dc2626;}
+.m2 .shr-field-label{color:#2563eb;}
+.m3 .shr-field-label{color:#7c3aed;}
 
-.shr-ftext{font-size:15px;color:#1f2329;margin:0 0 4px!important;line-height:1.9!important;
-  padding-left:12px!important;}
+/* 副业视角 */
+.shr-persp{background:#f5f3ff;border:1px solid #e9d5ff;border-left:4px solid #7c3aed;border-radius:0 12px 12px 0;padding:16px 20px;margin-top:18px;}
+.shr-persp-label{font-size:14px;font-weight:700;color:#7c3aed;margin:0 0 6px!important;}
+.shr-persp-text{font-size:15.5px;color:#4c1d95;margin:0!important;line-height:1.85;}
 
-/* ── 副业视角引用块 ── */
-.shr-persp{background:#f6f3ff;border-left:4px solid #7c5cff;
-  border-radius:0 10px 10px 0;padding:14px 18px;margin:16px 0 4px!important;}
-.shr-persp p{margin:0!important;font-size:15px;color:#3d2d6b;line-height:1.9!important;}
-
-/* ── 每日总结 ── */
-.shr-summary{background:#fffbf0;border:1px solid #eaecef;
-  border-left:4px solid #d98a00;border-radius:12px;padding:20px 22px;margin-top:40px;}
-.shr-summary h2{margin:0 0 14px!important;font-size:20px!important;color:#d98a00!important;
-  font-weight:800!important;line-height:1.3!important;padding:0!important;letter-spacing:-.2px;}
-.shr-meth{font-size:15px;line-height:1.9!important;color:#1f2329;margin:0 0 10px!important;}
-.shr-ev{margin-top:10px;font-size:12.5px;color:#6b7280;line-height:1.9!important;}
-.shr-ev a{color:#2f6fed;text-decoration:none;font-weight:600;margin:0 3px;}
+/* 每日总结 */
+.shr-summary{background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #d97706;border-radius:16px;padding:22px 26px;margin-top:44px;}
+.shr-summary h2{margin:0 0 14px!important;font-size:20px!important;font-weight:800!important;color:#b45309!important;line-height:1.3!important;}
+.shr-meth{font-size:15.5px;line-height:1.85!important;color:#374151;margin:0 0 12px!important;}
+.shr-ev{margin-top:10px;font-size:13px;color:#6b7280;line-height:1.8!important;}
+.shr-ev a{color:#2563eb;text-decoration:none;font-weight:600;margin:0 3px;}
 .shr-ev a:hover{text-decoration:underline;}
 
-/* ── 页脚 ── */
-.shr-footer{margin-top:48px;text-align:center;color:#999;font-size:11.5px;
-  padding-top:20px;border-top:1px solid #eaecef;}
+/* 页脚 */
+.shr-footer{margin-top:48px;text-align:center;color:#9ca3af;font-size:12px;padding-top:20px;border-top:1px solid #e5e7eb;}
 
-/* ── 响应式：移动端 ≤480px ── */
-@media screen and (max-width:480px){
-  .shr-wrap{padding:16px 12px 36px!important;}
-  .shr-h1{font-size:23px!important;}
-  .shr-mtitle{font-size:18px!important;}
-  .shr-card{padding:18px 18px!important;border-radius:10px!important;}
-  .shr-it-title{font-size:18.5px!important;}
-  .shr-field{font-size:14.5px!important;margin:14px 0 5px!important;padding-left:10px!important;}
-  .shr-ftext{font-size:14px!important;padding-left:10px!important;}
-  .shr-persp{padding:12px 14px!important;}
-  .shr-persp p{font-size:14px!important;}
-  .shr-summary{padding:16px!important;}
-  .shr-lede{padding:12px 14px!important;font-size:14px!important;}
-}
-
-/* ── 防止图片/表格溢出 ── */
+/* 防止溢出 */
 .shr-card img{max-width:100%!important;height:auto!important;border-radius:6px;}
 .shr-card table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
-.shr-card pre{white-space:pre-wrap;word-break:break-all;font-size:13px!important;
-  background:#f7f8fa;padding:12px;border-radius:8px;overflow-x:auto;}
+.shr-card pre{white-space:pre-wrap;word-break:break-all;font-size:13px!important;background:#f7f8fa;padding:12px;border-radius:8px;overflow-x:auto;}
+
+/* 响应式 */
+@media screen and (max-width:480px){
+  .shr-wrap{padding:20px 14px 40px!important;}
+  .shr-h1{font-size:26px!important;}
+  .shr-mtitle{font-size:20px!important;}
+  .shr-card{padding:18px 20px!important;border-radius:14px!important;}
+  .shr-it-title{font-size:18px!important;}
+  .shr-field-text,.shr-persp-text,.shr-meth{font-size:15px!important;}
+  .shr-lede{padding:12px 16px!important;font-size:14px!important;}
+  .shr-summary{padding:16px 18px!important;}
+}
 """
 
 # ── 模块定义 ──
@@ -169,13 +162,17 @@ def render_item(it, modcls):
         if key == "perspective":
             # 副业视角：紫色引用块
             rows += (
-                f'<h3 class="field per shr-field per">副业视角：</h3>\n'
-                f'<div class="perspective shr-persp"><p>{_esc(val_str)}</p></div>\n'
+                f'<div class="persp shr-persp">\n'
+                f'<h4 class="persp-label shr-persp-label">副业视角</h4>\n'
+                f'<p class="persp-text shr-persp-text">{_esc(val_str)}</p>\n'
+                f'</div>\n'
             )
         else:
             rows += (
-                f'<h3 class="field {modcls} shr-field {modcls}">{_esc(label)}：</h3>\n'
-                f'<p class="ftext shr-ftext">{_esc(val_str)}</p>\n'
+                f'<div class="field-row shr-field-row">\n'
+                f'<h4 class="field-label shr-field-label">{_esc(label)}</h4>\n'
+                f'<p class="field-text shr-field-text">{_esc(val_str)}</p>\n'
+                f'</div>\n'
             )
 
     return (
