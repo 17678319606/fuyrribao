@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """步骤2：读取当日去重信号，调用 AI 生成结构化日报 JSON。
 
-高延迟优化（v3.0 / v4.2 Gemini 首选）：
+高延迟优化（v3.0 / v4.2 Gemini 首选 / v4.3 原生 Gemini）：
 - 移除降级兜底：AI 不可用则直接失败， workflow 随之失败，不会发布非 AI 内容。
-- AI 后端首选 Google Gemini（OpenAI 兼容端点）：海外 Runner 直连 Google 全球边缘，
-  规避「海外 Runner → 国内网关」跨境瓶颈（根因）；可选 AI_BASE_URL_POOL 镜像 +
-  AI_FALLBACK_URL（国内网关）兜底。每个端点含独立 (url, key, model)。
+- AI 后端首选 Google Gemini（原生 API）：海外 Runner 直连 Google 全球边缘，
+  规避「海外 Runner → 国内网关」跨境瓶颈（根因）。
+  自动兼容 AI Studio 新版 AQ. Auth key（不支持 OpenAI 兼容端点，只能用原生 Gemini API）。
+- 可选 AI_BASE_URL_POOL 镜像 + AI_FALLBACK_URL（国内网关，OpenAI 兼容）兜底。
+  每个端点含独立 (url, key, model)，并根据 host 自动选择原生 Gemini 或 OpenAI 兼容协议。
 - 允许 AI_FORCE_NON_STREAM（强制非流式）、AI_REQUEST_TIMEOUT（覆盖读超时）以适配慢链路。
 - 保留 DNS-over-HTTPS 兜底与代理池，用于海外 Runner 偶发解析抖动（仅国内网关等易抖动 host）。
 """
@@ -121,7 +123,7 @@ def _parse_proxies():
 def _parse_base_urls():
     """解析候选 base_url：显式 AI_BASE_URL 优先，再拼 AI_BASE_URL_POOL（分号/逗号/换行分隔）。
     去重保序，空值/非 URL 占位符过滤。用于 AI 镜像/备用端点 fallback。"""
-    primary = os.environ.get("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/").strip()
+    primary = os.environ.get("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip()
     pool_raw = os.environ.get("AI_BASE_URL_POOL", "").strip()
     seen, out = set(), []
     for u in [primary] + re.split(r"[;,\n]", pool_raw):
@@ -136,7 +138,7 @@ def _parse_base_urls():
         if u not in seen:
             seen.add(u)
             out.append(u)
-    return out or ["https://generativelanguage.googleapis.com/v1beta/openai/"]
+    return out or ["https://generativelanguage.googleapis.com/v1beta"]
 
 
 def _candidate_endpoints():
@@ -243,13 +245,108 @@ def _install_dns_patch(host):
     LOG.info("DoH 兜底：%s 固定解析到 %s（后续直连不再依赖 Runner 本地 DNS）", host, target)
 
 
+def _is_gemini_native(base_url):
+    """判断端点是否为 Google Gemini 原生 API（非 OpenAI 兼容层）。
+
+    AI Studio 新版 AQ. Auth key 不支持 OpenAI 兼容端点，只能用原生 Gemini API：
+    https://generativelanguage.googleapis.com/v1beta/...
+    若 URL 包含 /openai/ 则视为 OpenAI 兼容层（旧 AIza key 才走这里）。
+    """
+    if not base_url:
+        return False
+    low = base_url.lower()
+    return "generativelanguage.googleapis.com" in low and "/openai/" not in low
+
+
+def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, stream=True):
+    """调用 Google Gemini 原生 API（适配 AI Studio AQ. Auth key）。
+
+    - 端点示例：https://generativelanguage.googleapis.com/v1beta
+    - 鉴权：URL 查询参数 ?key=API_KEY（AQ. Auth key 的标准用法）
+    - 非流式：models/{model}:generateContent
+    - 流式：models/{model}:streamGenerateContent（返回 JSON Lines）
+    返回模型原始 content 字符串。
+    """
+    start = time.time()
+    base_url = base_url.rstrip("/")
+    model_id = model.split("/")[-1] if "/" in model else model
+    action = "streamGenerateContent" if stream else "generateContent"
+    url = f"{base_url}/models/{model_id}:{action}?key={api_key}"
+
+    # Gemini 原生 API 把 system prompt 拼进 user contents 前面
+    full_prompt = f"{system_prompt}\n\n{user_prompt}".strip()
+    payload = {
+        "contents": [
+            {"role": "user", "parts": [{"text": full_prompt}]}
+        ],
+        "generationConfig": {
+            "temperature": 0.5,
+            "maxOutputTokens": MAX_OUTPUT_TOKENS,
+        },
+    }
+    headers = {"Content-Type": "application/json"}
+    timeout = _req_timeout()
+    mode = "stream" if stream else "non-stream"
+
+    LOG.info("Gemini 原生请求 [base=%s, model=%s] (%s)", base_url, model_id, mode)
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=stream)
+    resp.raise_for_status()
+
+    if not stream:
+        data = resp.json()
+        text = ""
+        for cand in data.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                text += part.get("text", "")
+        LOG.info("Gemini 原生请求成功（模式=non-stream，耗时 %.1fs，约 %d 字）",
+                 time.time() - start, len(text))
+        return text
+
+    # 流式：JSON Lines，每行一个完整 JSON chunk
+    content = ""
+    stream_deadline = time.time() + STREAM_MAX_SECONDS
+    last_progress = time.time()
+    for raw_line in resp.iter_lines(decode_unicode=False):
+        if time.time() > stream_deadline:
+            LOG.warning("Gemini 流式读取整体超时（>%ds），强制中断", STREAM_MAX_SECONDS)
+            break
+        if not raw_line:
+            continue
+        try:
+            line = raw_line.decode("utf-8").strip()
+        except Exception:
+            line = raw_line.decode("utf-8", "replace").strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for cand in obj.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                delta = part.get("text", "")
+                if delta:
+                    content += delta
+        if (time.time() - last_progress > 60 or
+                (len(content) > 0 and len(content) % 500 < 50)):
+            LOG.info("Gemini 流式读取中：已收 %d 字，耗时 %.1fs", len(content), time.time() - start)
+            last_progress = time.time()
+
+    if not content:
+        raise RuntimeError("Gemini 原生流式响应为空")
+    LOG.info("Gemini 原生请求成功（模式=stream，耗时 %.1fs，约 %d 字）",
+             time.time() - start, len(content))
+    return content
+
+
 def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True):
-    """调用 /chat/completions，支持多 (url,key,model) 端点 fallback + 端点轮换 + 重试。
+    """调用 AI，支持多 (url,key,model) 端点 fallback + 端点轮换 + 重试。
     返回模型原始 content 字符串。
 
     - base_urls 可为字符串或列表（首选，共用传入的 api_key/model）；
       另含可选 AI_FALLBACK_URL/KEY/MODEL 兜底端点（默认国内网关，独立 key/model）。
-    - 首选即 Google Gemini OpenAI 兼容端点：海外 Runner 直连，规避跨境瓶颈。
+    - 首选即 Google Gemini 原生 API：海外 Runner 直连，规避跨境瓶颈；
+      自动适配 AI Studio 新版 AQ. Auth key（不支持 OpenAI 兼容端点）。
     - AI_FORCE_NON_STREAM=1 时强制全部调用走非流式。
     - AI_REQUEST_TIMEOUT 可覆盖默认读超时。
     - 流式读取自带 STREAM_MAX_SECONDS 整体 wall-clock 上限，避免端点极慢吐数据或
@@ -283,6 +380,16 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
         endpoints.append((fb_url, fb_key, fb_model))
 
     for (base_url, api_key, model) in endpoints:
+        # Gemini 原生 API（适配 AI Studio AQ. Auth key）：直接调用，不走 OpenAI 兼容层/代理池
+        if _is_gemini_native(base_url):
+            try:
+                return _call_gemini_native(base_url, api_key, model,
+                                           system_prompt, user_prompt, stream)
+            except Exception as e:
+                LOG.warning("Gemini 原生调用失败（base=%s）：%s", base_url, e)
+                last_err = e
+                continue
+
         url = base_url.rstrip("/") + "/chat/completions"
         # 解析目标 host：仅国内网关等易抖动 host 才用 DoH 兜底钉 IP；
         # googleapis.com 等全球可达域名走正常 DNS 更稳。
