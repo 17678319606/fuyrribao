@@ -703,8 +703,88 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
             time.time() - start,))
 
 
+def _parse_lenient_json(s):
+    """对单段文本做容错 JSON 解析：直连 → 中文引号替换（双+单）→ 去 trailing comma/注释。"""
+    for cand in (s,
+                 s.replace("\u201c", '"').replace("\u201d", '"'),
+                 s.replace("\u2018", "'").replace("\u2019", "'")):
+        try:
+            return json.loads(cand)
+        except Exception:
+            continue
+    try:
+        cleaned = re.sub(r",(\s*[}\]])", r"\1", s)
+        cleaned = re.sub(r"//[^\n]*", "", cleaned)
+        cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.S)
+        return json.loads(cleaned)
+    except Exception:
+        return None
+
+
+def _salvage_truncated(s):
+    """流式被网关/链路截断（括号未闭合）时的兜底：
+    逐模块扫描，抠出『完整』的条目对象，丢弃最后一个没写完的条目，
+    重建一个合法（但可能偏短）的日报 JSON。连一条完整条目都抠不出则返回 None。
+    即便只剩半篇，也能保住已完整生成的条目，避免整跑因截断而失败。"""
+    modules = {k: [] for k in ("project_opportunities", "growth_operations", "views_insights")}
+    n = len(s)
+    for mod in modules:
+        marker = '"%s":' % mod
+        mi = s.find(marker)
+        if mi == -1:
+            continue
+        i = mi + len(marker)
+        while i < n and s[i] in " \t\n\r":
+            i += 1
+        if i >= n or s[i] != "[":
+            continue
+        i += 1
+        in_str = False
+        esc = False
+        depth = 0
+        buf = None
+        while i < n:
+            ch = s[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                i += 1
+                continue
+            if ch == '"':
+                in_str = True
+                i += 1
+                continue
+            if ch == "{":
+                if depth == 0:
+                    buf = i
+                depth += 1
+                i += 1
+                continue
+            if ch == "}":
+                depth -= 1
+                if depth == 0 and buf is not None:
+                    item = _parse_lenient_json(s[buf:i + 1])
+                    if item is not None:
+                        modules[mod].append(item)
+                    buf = None
+                i += 1
+                continue
+            i += 1
+    if sum(len(v) for v in modules.values()) == 0:
+        return None
+    return {"date": "", "modules": modules, "daily_summary": {"methodology": "", "evidence": []}}
+
+
 def _extract_json(text):
-    """从模型输出里抠出 JSON（兼容 ```json 围栏/前后文字/中文引号/字符串内含括号）。"""
+    """从模型输出里抠出 JSON（兼容 ```json 围栏/前后文字/中文引号/字符串内含括号/
+    流式被截断兜底）。
+
+    完整 JSON 优先返回；若流式被截断（括号未闭合），则降级到 _salvage_truncated
+    抠出已完整生成的条目，最大限度保住成果、避免整跑失败。"""
     if not text:
         return None
     s = text.strip()
@@ -714,7 +794,6 @@ def _extract_json(text):
     start = s.find("{")
     if start == -1:
         return None
-    # 括号平衡提取最外层对象（正确处理字符串值内的 { } 与转义字符）
     depth = 0
     in_str = False
     esc = False
@@ -738,24 +817,12 @@ def _extract_json(text):
             if depth == 0:
                 end = i
                 break
-    if end == -1:
-        return None
-    s = s[start:end + 1]
-    for cand in (s,
-                 s.replace("“", "\"").replace("”", "\""),
-                 s.replace("‘", "'").replace("’", "'")):
-        try:
-            return json.loads(cand)
-        except Exception:
-            continue
-    # 兜底：去 trailing comma 与 // 注释再试
-    try:
-        cleaned = re.sub(r",(\s*[}\]])", r"\1", s)
-        cleaned = re.sub(r"//[^\n]*", "", cleaned)
-        cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.S)
-        return json.loads(cleaned)
-    except Exception:
-        return None
+    if end != -1:
+        parsed = _parse_lenient_json(s[start:end + 1])
+        if parsed is not None:
+            return parsed
+    return _salvage_truncated(s[start:])
+
 
 
 def _validate(report):
