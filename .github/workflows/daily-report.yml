@@ -149,13 +149,9 @@ jobs:
             fi
           done
 
-      - name: 推送公众号（可选，未配置 WX_PUBLISH_MODE 则跳过；失败不阻断当日 WP 发布）
-        if: steps.preflight.outputs.skip != '1'
-        continue-on-error: true
-        run: |
-          sudo apt-get update -qq >/dev/null 2>&1 && sudo apt-get install -y -qq fonts-noto-cjk >/dev/null 2>&1 || true
-          python -m pip install --quiet pillow
-          python scripts/publish_wechat.py || echo "⚠️ 公众号推送失败（不影响 WordPress 已发布）"
+      # 公众号推送已移交 WordPress 插件（fuyr-wechat-pusher）在源站直接调用微信 API 处理，
+      # 利用服务器已在白名单的出口 IP，无需 CI 侧代理。故此处不再调用 publish_wechat.py，
+      # 避免与插件双重推送。CNB 侧通过 run_daily.py 的 WX_PUSH_VIA_WP 网关同样跳过 wechat 步骤。
 
       - name: 保存状态缓存（seen.json / CID 快照 / 当日累积日报，更新后持久化，下次运行 restore-keys 回退到最新）
         if: always()

@@ -79,7 +79,14 @@ def main():
     }
 
     try:
+        # 公众号推送已移交 WordPress 插件（fuyr-wechat-pusher）在源站处理，
+        # 设置 WX_PUSH_VIA_WP=1 时跳过 CI 侧 wechat 步骤，避免双重推送。
+        push_via_wp = os.environ.get("WX_PUSH_VIA_WP", "").strip().lower() in ("1", "true", "yes")
         for key, script in STEPS:
+            if key == "wechat" and push_via_wp:
+                status["steps"][key] = {"ok": True,
+                                        "tail": "skipped（公众号推送已交由 WordPress 插件 fuyr-wechat-pusher 在源站处理）"}
+                continue
             ok, out = _run(script)
             status["steps"][key] = {"ok": ok, "tail": out[-800:]}
             if not ok:
