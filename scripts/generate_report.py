@@ -134,9 +134,12 @@ def _parse_proxies():
 
 
 def _parse_base_urls():
-    """解析候选 base_url：显式 AI_BASE_URL 优先，再拼 AI_BASE_URL_POOL（分号/逗号/换行分隔）。
-    去重保序，空值/非 URL 占位符过滤。用于 AI 镜像/备用端点 fallback。"""
-    primary = os.environ.get("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip()
+    """解析候选 base_url：兼容大写 AI_BASE_URL / 小写 ai_base_url（原项目璇玑网关约定）。
+    显式设置优先；未设置时默认回退到国内网关 ai.jinbufenzi.com（用户原项目稳定可用的网关），
+    而非海外 Gemini，避免「默认即限流」。再拼 AI_BASE_URL_POOL（分号/逗号/换行分隔）。"""
+    explicit = (os.environ.get("ai_base_url", "").strip()
+                or os.environ.get("AI_BASE_URL", "").strip())
+    primary = explicit or "https://ai.jinbufenzi.com/v1"
     pool_raw = os.environ.get("AI_BASE_URL_POOL", "").strip()
     seen, out = set(), []
     for u in [primary] + re.split(r"[;,\n]", pool_raw):
@@ -151,7 +154,7 @@ def _parse_base_urls():
         if u not in seen:
             seen.add(u)
             out.append(u)
-    return out or ["https://generativelanguage.googleapis.com/v1beta"]
+    return out or ["https://ai.jinbufenzi.com/v1"]
 
 
 def _candidate_endpoints():
@@ -436,7 +439,11 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
     fb_model = os.environ.get("AI_FALLBACK_MODEL", "").strip() or model
     ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     ds_model = os.environ.get("DEEPSEEK_MODEL", "").strip() or "deepseek-chat"
-    ds_preferred = bool(ds_key)
+    # 仅当用户未显式指定 base_url（依赖默认网关）时才把 DeepSeek 自动插为首选，
+    # 避免覆盖用户明确配置的 ai.jinbufenzi 等网关。
+    user_set_base = (os.environ.get("AI_BASE_URL", "").strip()
+                     or os.environ.get("ai_base_url", "").strip())
+    ds_preferred = bool(ds_key) and not user_set_base
 
     for u in base_urls:
         u = (u or "").strip().rstrip("/")
@@ -930,11 +937,21 @@ def main():
     LOG.info("开始生成 %s 日报", today)
 
     # AI 配置与候选端点
-    # 兼容两种命名：GEMINI_API_KEY（直观）/ AI_API_KEY（历史）；AI_SIDEHUSTLE_API_KEY / AI_FALLBACK_KEY
+    # 兼容多套命名：GEMINI_API_KEY/AI_API_KEY/ai_api_key（历史+原项目小写约定）；
+    # AI_SIDEHUSTLE_API_KEY / AI_FALLBACK_KEY（兜底）。模型同理 AI_MODEL/ai_model。
     base_urls = _parse_base_urls()
-    api_key = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("AI_API_KEY", "")
-    fallback_key = os.environ.get("AI_SIDEHUSTLE_API_KEY", "") or os.environ.get("AI_FALLBACK_KEY", "")
-    model = os.environ.get("AI_MODEL", "gemini-flash-latest")
+    api_key = (os.environ.get("GEMINI_API_KEY", "") or os.environ.get("AI_API_KEY", "")
+               or os.environ.get("ai_api_key", ""))
+    fallback_key = (os.environ.get("AI_SIDEHUSTLE_API_KEY", "") or os.environ.get("AI_FALLBACK_KEY", "")
+                    or os.environ.get("ai_api_key", ""))
+    # 模型默认值随网关自适应：国内网关 ai.jinbufenzi.com 默认 qwen3.6-35b-a3b；
+    # 海外 Gemini 默认 gemini-flash-latest。用户可用 AI_MODEL/ai_model 显式覆盖。
+    _default_model = "gemini-flash-latest"
+    _first_base = (base_urls[0] if base_urls else "")
+    if "jinbufenzi" in _first_base:
+        _default_model = "qwen3.6-35b-a3b"
+    model = (os.environ.get("AI_MODEL", "") or os.environ.get("ai_model", "")
+             or _default_model)
     if _force_non_stream():
         LOG.info("强制非流式模式：所有 AI 调用使用整包返回（可在 Secret AI_FORCE_NON_STREAM=0 关闭）")
 
@@ -986,7 +1003,7 @@ def main():
         report = accumulated
     else:
         if not api_key and not fallback_key:
-            LOG.error("缺少任何 AI key（未配置 GEMINI_API_KEY/AI_API_KEY 或 AI_SIDEHUSTLE_API_KEY/AI_FALLBACK_KEY），无法生成。")
+            LOG.error("缺少任何 AI key（未配置 GEMINI_API_KEY/AI_API_KEY/ai_api_key 或 AI_SIDEHUSTLE_API_KEY/AI_FALLBACK_KEY），无法生成。")
             raise SystemExit("missing AI key")
 
         # 候选编排（仅对新信号）：候选过多 → 分批筛选；中小批量 → 均衡采样；最后统一上限。
