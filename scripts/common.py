@@ -134,3 +134,24 @@ def merge_reports(existing, new):
     merged["date"] = existing.get("date") or new.get("date")
     merged["timezone"] = existing.get("timezone") or new.get("timezone") or "Asia/Shanghai"
     return merged
+
+
+def cap_modules(modules, max_total):
+    """截断 modules 使三模块总条数 ≤ max_total（保持相对均衡：反复从最长模块尾部删 1 条）。
+
+    用于强制「分波上限 / 全天上限」：首波 ≤30、末波新增 ≤30、全天 ≤60。
+    """
+    if not isinstance(max_total, int):
+        return modules
+    out = {m: list(modules.get(m, [])) for m in MODULES}
+
+    def _total():
+        return sum(len(out[m]) for m in MODULES)
+
+    while _total() > max_total:
+        cand = [m for m in MODULES if out[m]]
+        if not cand:
+            break
+        longest = max(cand, key=lambda m: len(out[m]))
+        out[longest].pop()
+    return out

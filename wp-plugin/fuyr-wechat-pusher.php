@@ -17,7 +17,7 @@ function fuyr_wxp_defaults() {
     return array(
         'appid'       => '',
         'secret'      => '',
-        'mode'        => 'freepublish', // freepublish | draft | mass
+        'mode'        => 'draft', // freepublish(微信已废弃45106) | draft | mass
         'author'      => '副业日报',
         'final_hour'  => 19,
         'category'    => '日报',
@@ -284,8 +284,17 @@ function fuyr_wxp_push($post_id, $force = false) {
             $r = new WP_Error('too_early', '当前北京小时 ' . $hour . ' < ' . intval($o['final_hour']) . '，等待末次发布后再推');
             return $r; // 正常跳过，不记录为失败
         }
-        if (get_option('fuyr_wxp_pushed_date') === fuyr_wxp_bj_date()) {
-            $r = new WP_Error('dup', '今日已推送，跳过');
+        // 去重改为「内容感知」：仅当「今天已推过 且 文章自上次推送后未再更新」才跳过。
+        // 这样：
+        //   ① 6 点那波更新（hour<final_hour）本来就 too_early 不推；
+        //   ② 19 点末次更新（内容变化 → post_modified 改变）会重新推送最新合并版，
+        //      不会被早先的「手动推送 / 早一波」永久阻塞（修掉"点了立即生成后定时不推"的体感）；
+        //   ③ 同一内容被重复保存（定时 + 宝塔兜底内容一致）才会判定 dup 跳过，避免双发。
+        $pushed_date     = get_option('fuyr_wxp_pushed_date', '');
+        $pushed_modified = get_option('fuyr_wxp_pushed_modified', '');
+        $cur_modified    = $post->post_modified_gmt ?: $post->post_modified;
+        if ($pushed_date === fuyr_wxp_bj_date() && $pushed_modified === $cur_modified) {
+            $r = new WP_Error('dup', '今日已推送且内容未变，跳过');
             return $r;
         }
     }
@@ -318,6 +327,13 @@ function fuyr_wxp_push($post_id, $force = false) {
     );
 
     $mode = $o['mode'];
+    // freepublish/submit 接口已被微信废弃（错误 45106: This API has been unsupported）。
+    // 为「确保能正常推送」，这里自动降级为 draft（进公众号草稿箱，手动点发布即可），
+    // 并在后台提示用户到设置页把模式改为 draft。
+    if ($mode === 'freepublish') {
+        $mode = 'draft';
+        fuyr_wxp_notice('error', '推送方式仍为 freepublish（微信已废弃该接口，报 45106）。已自动按「仅存草稿(draft)」推送，请到设置页把模式改为 draft。');
+    }
     if ($mode === 'draft') {
         $r = fuyr_wxp_api('draft/add', array('articles' => array($article)), $token);
         if (is_wp_error($r)) { fuyr_wxp_record_result($r); return $r; }
@@ -333,14 +349,15 @@ function fuyr_wxp_push($post_id, $force = false) {
         if (is_wp_error($mr)) { fuyr_wxp_record_result($mr); return $mr; }
         $msg = '已群发 msg_id=' . ($mr['msg_id'] ?? '');
     } else {
-        $r = fuyr_wxp_api('material/add_news', array('articles' => array($article)), $token);
+        // 未知模式兜底为 draft，保证可推送
+        $r = fuyr_wxp_api('draft/add', array('articles' => array($article)), $token);
         if (is_wp_error($r)) { fuyr_wxp_record_result($r); return $r; }
-        $pr = fuyr_wxp_api('freepublish/submit', array('media_id' => $r['media_id']), $token);
-        if (is_wp_error($pr)) { fuyr_wxp_record_result($pr); return $pr; }
-        $msg = '已发布(publish_id)=' . ($pr['publish_id'] ?? '');
+        $msg = '已存草稿(模式未知,兜底) media_id=' . ($r['media_id'] ?? '');
     }
 
     update_option('fuyr_wxp_pushed_date', fuyr_wxp_bj_date());
+    // 记录「上次推送时的文章版本」，供内容感知去重判断（见上方 too_early/dup 逻辑）
+    update_option('fuyr_wxp_pushed_modified', $post->post_modified_gmt ?: $post->post_modified);
     fuyr_wxp_record_result($msg, true);
     fuyr_wxp_notice('success', '公众号推送成功：' . $msg);
     return $msg;
@@ -460,7 +477,7 @@ function fuyr_wxp_sanitize($input) {
     $out = array();
     $out['appid']      = sanitize_text_field($input['appid'] ?? '');
     $out['secret']     = sanitize_text_field($input['secret'] ?? '');
-    $out['mode']       = in_array($input['mode'] ?? '', array('freepublish', 'draft', 'mass'), true) ? $input['mode'] : 'freepublish';
+    $out['mode']       = in_array($input['mode'] ?? '', array('freepublish', 'draft', 'mass'), true) ? $input['mode'] : 'draft';
     $out['author']     = sanitize_text_field($input['author'] ?? $d['author']);
     $out['final_hour'] = intval($input['final_hour'] ?? $d['final_hour']);
     if ($out['final_hour'] < 0 || $out['final_hour'] > 23) {

@@ -943,6 +943,19 @@ def main():
     today = C.date_str()
     LOG.info("开始生成 %s 日报", today)
 
+    # 末波判定：优先用 workflow 注入的 DOCGEN_IS_FINAL；未注入时按北京时间回退判定。
+    # 末波（19:01 及之后 / 早于 06:00 / 手动触发）需要输出「覆盖全天」的心法总结。
+    _isf_env = os.environ.get("DOCGEN_IS_FINAL", "").strip()
+    if _isf_env in ("1", "true", "True"):
+        is_final = True
+    elif _isf_env in ("0", "false", "False"):
+        is_final = False
+    else:
+        _bjh = C.beijing_now().hour
+        is_final = (os.environ.get("GITHUB_EVENT_NAME", "") == "workflow_dispatch") \
+            or _bjh >= 19 or _bjh < 6
+    LOG.info("本波是否末波(is_final)=%s", is_final)
+
     # AI 配置与候选端点
     # 兼容多套命名：GEMINI_API_KEY/AI_API_KEY/ai_api_key（历史+原项目小写约定）；
     # AI_SIDEHUSTLE_API_KEY / AI_FALLBACK_KEY（兜底）。模型同理 AI_MODEL/ai_model。
@@ -1011,6 +1024,9 @@ def main():
 
     acc_total = sum(len(acc_modules.get(m, [])) for m in C.MODULES)
     changed = bool(new_signals) or force_rerender
+    # 末波：即便本波无新增，也要基于已收录内容重算"全天心法总结"，故视为需生成
+    if is_final and acc_total > 0:
+        changed = True
 
     if not changed:
         LOG.info("今日无新增信号（已累积 %d 条）且无渲染器更新，跳过生成与发布。", acc_total)
@@ -1081,15 +1097,60 @@ def main():
             LOG.error("无法读取 SKILL.md：%s", e)
             raise
 
-        # 为最终生成裁剪信号：保留元数据，content 截断到 1500 字符，
-        # 兼顾"给 AI 足够上下文写出完整摘要"与"控制上下文压力防网关 400/超时"。
+        # 为最终生成裁剪信号：保留元数据，content 截断到 1500 字符
         prompt_signals = _trim_signals_for_prompt(new_signals, max_content=1500)
-        user_prompt = (
-            f"今天是 {today}（北京时间）。以下是已完成去重的当日【新增】信号（JSON），"
-            f"请仅基于这些新增信号生成条目，勿重复已有内容：\n"
-            f"```json\n{json.dumps(prompt_signals, ensure_ascii=False, indent=2)}\n```\n"
-            f"请严格按上面 SKILL.md（v3.0 老创业人基底）的规则，输出 ai-sidehustle-report 日报 JSON。"
-        )
+        _MOD_TITLE = {
+            "project_opportunities": "项目机会库",
+            "growth_operations": "增长运营",
+            "views_insights": "观点心法",
+        }
+        if is_final and acc_total > 0:
+            # 末波：把"已收录"条目按模块分组作为上下文喂给 AI，让其输出完整 modules
+            # （已收录 + 新增去重）且 daily_summary 覆盖全天；条数上限 = min(60, 已有+30)
+            wave_cap = min(60, acc_total + 30)
+            acc_parts = []
+            for m in C.MODULES:
+                items = acc_modules.get(m, [])
+                if items:
+                    acc_parts.append(
+                        "【已收录-%s】\n%s" % (
+                            _MOD_TITLE.get(m, m),
+                            json.dumps(items, ensure_ascii=False, indent=2),
+                        )
+                    )
+            acc_block = "\n\n".join(acc_parts) if acc_parts else "（无）"
+            new_block = json.dumps(prompt_signals, ensure_ascii=False, indent=2)
+            user_prompt = (
+                f"今天是 {today}（北京时间）。本日报每天两波更新，现在是【末波】。\n"
+                f"【已收录条目】（今日早些时候已纳入日报，请保留并在最后「每日总结」中一并覆盖，勿重复收录）：\n"
+                f"{acc_block}\n"
+                f"【本次新增待筛选信号】（JSON，请从中严格筛选符合主题与质量门槛的条目，补充进各模块）：\n"
+                f"```json\n{new_block}\n```\n"
+                f"请严格按 SKILL.md（v4 老创业人 · 严格筛选版）规则，输出【完整】日报 JSON："
+                f"已收录 + 新增 去重合并，三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均）；"
+                f"daily_summary.methodology 必须覆盖【全部】条目（已收录 + 新增）提炼出的一天可复用方法论。"
+            )
+        elif is_final and acc_total == 0:
+            # 末波但无早波收录（早波漏跑）：当作全天处理，上限 60
+            wave_cap = 60
+            new_block = json.dumps(prompt_signals, ensure_ascii=False, indent=2)
+            user_prompt = (
+                f"今天是 {today}（北京时间）。本日报两波更新，今日首波即末波（此前无早波收录）。\n"
+                f"以下是当日【新增】信号（JSON）：\n```json\n{new_block}\n```\n"
+                f"请严格按 SKILL.md（v4 老创业人 · 严格筛选版）规则，输出日报 JSON："
+                f"三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均，可某模块为空），宁缺毋滥。"
+            )
+        else:
+            # 首波（非末波）：只处理本波新增，上限 30
+            wave_cap = 30
+            new_block = json.dumps(prompt_signals, ensure_ascii=False, indent=2)
+            user_prompt = (
+                f"今天是 {today}（北京时间）。以下是已完成去重的当日【新增】信号（JSON），"
+                f"请仅基于这些新增信号生成条目，勿重复已有内容：\n"
+                f"```json\n{new_block}\n```\n"
+                f"请严格按 SKILL.md（v4 老创业人 · 严格筛选版）规则，输出 ai-sidehustle-report 日报 JSON。"
+                f"本波三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均，可某模块为空），宁缺毋滥。"
+            )
 
         # 调用 AI（生成级重试：应对空生成 / 解析失败 / 结构不完整）
         content = None
@@ -1152,6 +1213,13 @@ def main():
 
         # 合并到当日累积（旧内容保留 + 新内容去重追加）
         merged = C.merge_reports(accumulated, report)
+        # 强制分波 / 全天条数上限：首波 ≤30；末波无早波收录 ≤60；
+        # 末波有早波收录 ≤ 已有+30（即本波新增 ≤30，全天 ≤60）
+        if is_final:
+            hard = 60 if acc_total == 0 else min(60, acc_total + 30)
+        else:
+            hard = 30
+        merged["modules"] = C.cap_modules(merged["modules"], hard)
         merged["date"] = today
         merged["timezone"] = "Asia/Shanghai"
         report = merged

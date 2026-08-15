@@ -108,9 +108,15 @@ jobs:
           # 定时运行始终执行（由同日累积逻辑增量刷新，不再早退跳过，避免修复永不落地）。
           force_rerender = (live_ver < C.RENDERER_VERSION and post_content != "") or force_update
           open(envf, "a").write("DOCGEN_FORCE_RERENDER=%s\n" % ("1" if force_rerender else "0"))
+          # 末波判定：北京时间 19:00 及之后、06:00 之前、或手动触发(workflow_dispatch) → 末波。
+          # 末波需输出「覆盖全天」的心法总结，并放宽上限至 60 条；非末波（晨间首波）上限 30 条。
+          # 该值在 preflight 写出到 GITHUB_ENV，供 generate_report.py 读取（覆盖其回退判定）。
+          bj_hour = datetime.datetime.now(BJ).hour
+          is_final = (event == "workflow_dispatch") or bj_hour >= 19 or bj_hour < 6
+          open(envf, "a").write("DOCGEN_IS_FINAL=%s\n" % ("1" if is_final else "0"))
           open(out, "a").write("skip=0\n")
-          print("live_renderer_version=%s, current=%s, force_rerender=%s (event=%s)"
-                % (live_ver, C.RENDERER_VERSION, force_rerender, event))
+          print("live_renderer_version=%s, current=%s, force_rerender=%s, is_final=%s (event=%s)"
+                % (live_ver, C.RENDERER_VERSION, force_rerender, is_final, event))
           PY
 
       - name: 采集 + AI 生成 + 发布（高延迟 AI 收敛重试）
