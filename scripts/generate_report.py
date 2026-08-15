@@ -857,6 +857,84 @@ def _validate(report):
     return True
 
 
+# —— 空心条目检测模式（标题/信号层面的硬排除）——
+_HOLLOW_TITLE_PATTERNS = [
+    r"不敢结婚", r"官宣.*创业", r"离职.*创业", r"入职", r"融资.*亿",
+    r"年薪.*留不住", r"跳槽", r"加盟", r"出任", r"升任",
+    r"发布.*新品", r"发布.*版本", r"获得.*投资", r"完成.*融资",
+    r"估值.*亿", r" IPO ", r"上市", r"并购", r"收购",
+]
+_HOLLOW_FLUFF = ["N/A", "n/a", "暂无", "待定", "详见原文", "无", "—", "-", "／",
+                  "反映.*发展", "体现.*趋势", "潜力巨大", "值得关注", "具有重要意义",
+                  "不可忽视", "具有深远影响", "涌动", "频繁"]
+
+
+def _is_hollow_item(item):
+    """检测一条 item 是否为空心内容（对副业读者零 actionable value）。
+    返回 (is_hollow: bool, reason: str)。
+    """
+    t = (item.get("title") or "") + (item.get("signal") or "")
+    mvp = (item.get("how_to_mvp") or "").strip()
+    acq = (item.get("acquisition_channel") or "").strip()
+    mon = (item.get("monetization") or "").strip()
+    val = (item.get("value_proposition") or "").strip()
+    per = (item.get("perspective") or "").strip()
+
+    # 1) 标题/信号命中名人动态、人事变动、纯融资等硬排除模式
+    import re
+    for pat in _HOLLOW_TITLE_PATTERNS:
+        if re.search(pat, t):
+            # 例外：如果 MVP 或获客渠道有具体内容（≥15字且不是套话），则放行
+            has_actionable = (
+                len(mvp) >= 15 and not any(f in mvp for f in _HOLLOW_FLUFF)
+            ) or (
+                len(acq) >= 15 and not any(f in acq for f in _HOLLOW_FLUFF)
+            )
+            if not has_actionable:
+                return True, f"命中排除模式「{pat}」且无可操作内容"
+
+    # 2) 核心行动字段全空或全是套话 → 空心
+    action_fields = [mvp, acq, mon]
+    non_empty = [f for f in action_fields if len(f.strip()) >= 10]
+    if len(non_empty) == 0:
+        # 观点心法模块可以没有 MVP/获客，但至少要有实质性的 perspective 或 value_proposition
+        is_views = (len(per) >= 20 or len(val) >= 20)
+        if not is_views:
+            return True, "核心行动字段(MVP/获客/变现)全空，且观点/价值主张也不足"
+
+    # 3) 所有字段都是正确的废话（≤30字且命中套话库）
+    all_text = " ".join([mvp, acq, mon, val, per])
+    if len(all_text) > 0 and len(all_text) < 80:
+        fluff_count = sum(1 for f in _HOLLOW_FLUFF if f.lower() in all_text.lower())
+        if fluff_count >= 2:
+            return True, f"所有字段过短({len(all_text)}字)且含{fluff_count}条套话"
+
+    return False, ""
+
+
+def _actionable_check(report):
+    """生成后校验：扫描所有模块的 item，标记并剔除空心条目。返回 (cleaned_report, removed_count)。"""
+    import re
+    removed = 0
+    mods = report.get("modules", {})
+    for key in ("project_opportunities", "growth_operations", "views_insights"):
+        items = mods.get(key, [])
+        keep = []
+        for it in items:
+            hollow, reason = _is_hollow_item(it)
+            if hollow:
+                removed += 1
+                LOG.warning("【空心剔除】%s -> %s | 标题: %s", key, reason,
+                            (it.get("title") or "")[:60])
+            else:
+                keep.append(it)
+        mods[key] = keep
+    if removed > 0:
+        LOG.warning("【行动性校验】共剔除 %d 条空心条目，剩余 %d 条",
+                    removed, sum(len(m) for m in mods.values()))
+    return report, removed
+
+
 # 画布字段 key（与 publish_wp.CANVAS_FIELDS 对应）；用于骨架判定
 _CANVAS_KEYS = (
     "signal", "target_customer", "value_proposition", "how_to_mvp",
@@ -923,12 +1001,33 @@ def _empty_report(date):
 
 def _screen_system_prompt():
     return (
-        "你是副业/创业领域的内容筛选专家。任务：从一批候选信号中，"
-        "挑出与「副业赚钱、独立开发、创业增长、产品运营、AI 变现、效率工具」"
-        "最相关、信息密度最高、最值得写进今日日报的条目。"
-        "严格宁缺毋滥：广告、纯资讯快讯、低质或重复内容可跳过。"
+        "你是「副业日报」的内容守门员。你的唯一任务：从候选信号中挑出"
+        "对「想搞副业/独立开发/做项目赚钱的普通人」真正有价值的条目。\n\n"
+        "## 必须通过的「读者价值测试」\n"
+        "每条入选必须能让读者回答出以下至少一个问题（越具体越好）：\n"
+        "- 我能做什么具体的事？（项目点子、工具用法、操作步骤）\n"
+        "- 我能学到什么可复用的方法？（获客技巧、变现思路、避坑经验）\n"
+        "- 我能得到什么新的认知启发？（改变我对某件事的看法、发现新机会）\n"
+        "如果一条信号读完后读者只能说「哦，知道了」，但不知道能干嘛、学不到方法、"
+        "也得不到启发 → **直接丢弃，不给分**。\n\n"
+        "## 明确丢弃（score=0，不要选）\n"
+        "- **名人动态 / 人事变动**：某大佬离职/入职/创业/官宣/融资（除非文章详细讲了"
+        "  具体怎么做、用什么方法、踩了什么坑——光有名字和头衔不算）\n"
+        "- **行业八卦 / 花边**：谁跟谁吵架、谁说了什么惊人之语、谁不敢结婚……"
+        "- **纯趋势观察 / 正确的废话**：「AI 发展很快」「人才流动频繁」「潜力巨大」"
+        "  ——这些话永远正确但对读者零 actionable value\n"
+        "- **泛科技资讯**：某模型/框架发布新版本（无副业用法）、某公司发布新产品（无赚钱角度）\n"
+        "- **新闻播报类**：政策原文、财报数字罗列、发布会纪要（无落地解读）\n"
+        "- **空心模板填充**：MVP 写 N/A 或空、获客渠道为空、变现说明全是定性空话无数据\n\n"
+        "## 评分标准（1-10）\n"
+        "- 9-10：有具体项目案例 + 真实收入数据 + 可复用步骤（读者照着就能试）\n"
+        "- 7-8：有明确方法论或工具推荐，读者能学到东西并应用\n"
+        "- 5-6：有一定启发但偏泛，需要读者自己脑补很多细节\n"
+        "- 3-4：沾边但信息增量低，属于「知道了也没什么用」\n"
+        "- 1-2：勉强相关但基本是凑数的\n"
+        "- 0：不相关或上述「明确丢弃」类型\n\n"
         "只输出 JSON：{\"picks\":[{\"id\":\"与输入完全一致的原始 id\","
-        "\"score\":1-10,\"reason\":\"一句话理由\"}]}。"
+        "\"score\":1-10,\"reason\":\"一句话理由（必须说明为什么对副业读者有价值）\"}]}。"
     )
 
 
@@ -1250,7 +1349,7 @@ def main():
                 f"{acc_block}\n"
                 f"【本次新增待筛选信号】（JSON，请从中严格筛选符合主题与质量门槛的条目，补充进各模块）：\n"
                 f"```json\n{new_block}\n```\n"
-                f"请严格按 SKILL.md（v4 老创业人 · 严格筛选版）规则，输出【完整】日报 JSON："
+                f"请严格按 SKILL.md（v4.1 老创业人 · 严格筛选版）规则，输出【完整】日报 JSON："
                 f"已收录 + 新增 去重合并，三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均）；"
                 f"daily_summary.methodology 必须覆盖【全部】条目（已收录 + 新增）提炼出的一天可复用方法论。"
             )
@@ -1261,7 +1360,7 @@ def main():
             user_prompt = (
                 f"今天是 {today}（北京时间）。本日报两波更新，今日首波即末波（此前无早波收录）。\n"
                 f"以下是当日【新增】信号（JSON）：\n```json\n{new_block}\n```\n"
-                f"请严格按 SKILL.md（v4 老创业人 · 严格筛选版）规则，输出日报 JSON："
+                f"请严格按 SKILL.md（v4.1 老创业人 · 严格筛选版）规则，输出日报 JSON："
                 f"三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均，可某模块为空），宁缺毋滥。"
             )
         else:
@@ -1272,7 +1371,7 @@ def main():
                 f"今天是 {today}（北京时间）。以下是已完成去重的当日【新增】信号（JSON），"
                 f"请仅基于这些新增信号生成条目，勿重复已有内容：\n"
                 f"```json\n{new_block}\n```\n"
-                f"请严格按 SKILL.md（v4 老创业人 · 严格筛选版）规则，输出 ai-sidehustle-report 日报 JSON。"
+                f"请严格按 SKILL.md（v4.1 老创业人 · 严格筛选版）规则，输出 ai-sidehustle-report 日报 JSON。"
                 f"本波三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均，可某模块为空），宁缺毋滥。"
             )
 
@@ -1317,6 +1416,18 @@ def main():
                 if acc_total == 0:
                     raise SystemExit("skeleton report rejected: only titles, no field content")
                 LOG.warning("新增批次疑似骨架，跳过该批次（保留已累积 %d 条）。", acc_total)
+                report = None
+                break
+            # 行动性校验：剔除空心条目（名人动态/人事变动/纯融资/正确废话）
+            report, hollow_removed = _actionable_check(report)
+            if hollow_removed > 0 and sum(len(report.get("modules", {}).get(k, [])) for k in C.MODULES) == 0:
+                LOG.error("行动性校验后所有条目被剔除，第 %d/%d 次生成将重生成", gen, GEN_RETRIES)
+                if gen < GEN_RETRIES:
+                    time.sleep(BACKOFF_BASE)
+                    continue
+                if acc_total == 0:
+                    raise SystemExit("all items removed by actionable check")
+                LOG.warning("新增批次全被剔除为空心，跳过该批次（保留已累积 %d 条）。", acc_total)
                 report = None
                 break
             total = sum(len(report.get("modules", {}).get(k, [])) for k in C.MODULES)
