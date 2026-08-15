@@ -17,6 +17,10 @@
 # 触发方式：crontab ×2（系统定时）/ web_trigger（网页运行）/ api_trigger（Open API build/start）。
 
 .cnb-job: &cnb-job
+  # 密钥从秘钥仓库注入（jinbufenzi/fuyrribao-secrets/env.yml）
+  # 修改密钥只需在秘钥仓库网页编辑 env.yml，无需改代码或重新推送
+  imports:
+    - https://cnb.cool/jinbufenzi/fuyrribao-secrets/-/blob/main/env.yml
   - docker:
       image: python:3.11
     runner:
