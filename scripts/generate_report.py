@@ -57,6 +57,7 @@ SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全�
 SCREEN_BATCH = 60         # 每批送入筛选的候选数（平衡单批覆盖度与调用次数）
 SCREEN_KEEP_PER_BATCH = 10  # 每批最多保留的精华条数（仅作日志参考，实际取汇总 TopN）
 SCREEN_FINAL_CAP = 50     # 筛选后送入最终生成的最大条数（收敛上下文，减少 400/截断）
+SCREEN_INPUT_CAP = 180    # 防御性上限：候选总量超过此数先按源均衡采样，避免一次性压垮 AI 端点（限流/超时）
 
 
 def _req_timeout():
@@ -594,6 +595,11 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     except Exception:
                         pass
                     last_err = e
+                    # 限流 429：同一端点重试只会继续撞墙、耗尽额度且拖慢整体。
+                    # 立即放弃该端点、转下一端点（兜底），让有配额的端点接管，而非死磕限流端点。
+                    if status == 429:
+                        LOG.warning("AI 接口返回 429 限流（base=%s），放弃该端点、转下一端点（兜底）", base_url)
+                        raise _AbandonEndpoint(f"429 rate limit on {base_url}")
                     # 网关若不支持 chat_template_kwargs（400），去掉该参数重试一次，
                     # 避免整端点因一个可选参数被拒而失效（其他 OpenAI 兼容端点也可能不支持）。
                     if status == 400 and "chat_template_kwargs" in payload and not strip_thinking:
@@ -973,6 +979,26 @@ def main():
             raise SystemExit("missing AI key")
 
         # 候选编排（仅对新信号）：候选过多 → 分批筛选；中小批量 → 均衡采样；最后统一上限。
+        # 防御性收敛：候选总量过大（如冷启动多源聚合 600+ 条）会一次性压垮 AI 端点
+        # （限流/超时），先按源均衡采样到安全上限，保证每个源仍有机会被看到。
+        if len(new_signals) > SCREEN_INPUT_CAP:
+            import random
+            from collections import OrderedDict
+            random.shuffle(new_signals)
+            groups = OrderedDict()
+            for s in new_signals:
+                groups.setdefault(s.get("source_name", "未知"), []).append(s)
+            sampled, total0 = [], len(new_signals)
+            while len(sampled) < SCREEN_INPUT_CAP and any(groups.values()):
+                for nm in list(groups.keys()):
+                    if groups[nm]:
+                        sampled.append(groups[nm].pop(0))
+                        if len(sampled) >= SCREEN_INPUT_CAP:
+                            break
+            new_signals = sampled
+            LOG.info("候选总量 %d 超安全上限 %d，按源均衡采样至 %d 条（避免一次性压垮 AI 端点）",
+                     total0, SCREEN_INPUT_CAP, len(new_signals))
+
         if len(new_signals) > SCREEN_THRESHOLD:
             new_signals = screen_signals(new_signals, base_urls, api_key, model, _screen_system_prompt())
         elif len(new_signals) > MAX_INPUT_SIGNALS:
