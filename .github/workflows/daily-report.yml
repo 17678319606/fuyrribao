@@ -1,0 +1,219 @@
+# 副业日报每日生成流水线（混合触发版 v3）
+# ─────────────────────────────────────────────────────────────────────
+# 主触发：用户 1H1G 宝塔服务器 19:00 cron → 调 GitHub Dispatch API（见 trigger_daily.sh）
+# 晨间触发：GitHub 自带定时 06:01（北京时间）生成当日首版，让读者早晨就能看到新日报
+# 备触发：GitHub 自带定时 19:40 / 20:10（北京时间）兜底，仅当主触发失败/未跑时补发
+# 同日多时段覆盖：派发（手动/宝塔 19:00）运行覆盖更新同日文章（链接不变），晨间定时生成首版，
+#               晚间派发刷新内容 —— 不同时间段落看同日日报都可能遇到新内容（省额度+绝不双发）
+# 防 GitHub 60天停用：每次运行都提交 state/heartbeat.txt，保证仓库每日有 push 活动
+# 失败告警：企业微信机器人（workflow 级 failure 步骤）+ 服务器侧双告警（trigger_daily.sh）
+# 密钥全部走 GitHub Secrets / 环境变量，绝不硬编码敏感信息。
+name: 副业日报每日生成
+
+on:
+  schedule:
+    - cron: '1 22 * * *'      # UTC 22:01 前一天 = 北京时间 06:01（晨间首版）
+    - cron: '40 11 * * *'     # UTC 11:40 = 北京时间 19:40（备用补发 1）
+    - cron: '10 12 * * *'     # UTC 12:10 = 北京时间 20:10（备用补发 2）
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '强制更新今日文章（覆盖已发布内容，用于修正排版）'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write               # 仅用于提交心跳 / 去重状态 / 产物回仓库
+
+concurrency:
+  group: fuyrribao-daily
+  cancel-in-progress: false    # 同一时刻只允许一个运行；避免宝塔触发与备用定时并发导致双发
+
+env:
+  TZ: Asia/Shanghai
+  WP_URL: https://dajiayouxuan.com
+  WP_USER: tougao
+  WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+  WP_CATEGORY_NAME: 日报
+  # —— AI 后端：首选 Google Gemini（原生 API，适配 AI Studio 新版 AQ. Auth key）——
+  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
+  AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  AI_ENABLE_FALLBACK: '1'   # 国产 AI 备用（AI_FALLBACK_URL 存在即自动启用；此变量为语义标记，预留给未来按需关闭）
+  # 模型名放 Secret 里（可选）：不设则用默认 gemini-flash-latest（AI Studio 别名；
+  # 注意：gemini-2.5-flash-latest 这类带版本号的名字在原生 API 上会 404，必须用 latest 别名）。
+  # 以后换模型只改 Secrets.AI_MODEL，无需动代码。
+  AI_MODEL: ${{ secrets.AI_MODEL || 'gemini-flash-latest' }}
+  # 可选：同构镜像（共用 GEMINI_API_KEY），分号/逗号/换行分隔
+  AI_BASE_URL_POOL: ${{ secrets.AI_BASE_URL_POOL }}
+  # 可选兜底：Gemini 全失败时退回国内网关（沿用既有 key + 自有模型）
+  AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
+  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  AI_FALLBACK_MODEL: auto
+  AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}
+  AI_REQUEST_TIMEOUT: ${{ secrets.AI_REQUEST_TIMEOUT }}
+  AI_FORCE_NON_STREAM: ${{ secrets.AI_FORCE_NON_STREAM }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' && '1' || '0' }}
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
+
+      - name: 恢复状态缓存（seen.json / CID 快照 / 当日累积日报，走缓存而非提交 git，避免仓库膨胀）
+        id: statecache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state/
+          key: fuyrribao-state-${{ github.run_id }}
+          restore-keys: |
+            fuyrribao-state-
+
+      # ---------- 同日增量累积：定时始终执行（由累积逻辑增量刷新），仅在「线上当日文章渲染器版本过旧」时强制重渲染 ----------
+      - name: 渲染器版本检查（决定是否强制重渲染以落地修复）
+        id: preflight
+        run: |
+          python - <<'PY'
+          import os, sys, base64, requests, datetime
+          sys.path.insert(0, "scripts")
+          import common as C
+          out = os.environ.get("GITHUB_OUTPUT", "/dev/null")
+          envf = os.environ.get("GITHUB_ENV", "/dev/null")
+          BJ = datetime.timezone(datetime.timedelta(hours=8))
+          today = datetime.datetime.now(BJ).strftime("%Y-%m-%d")
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
+          force_update = os.environ.get("FORCE_UPDATE", "") == "1"
+          post_content = ""
+          try:
+              wp = os.environ["WP_URL"].rstrip("/")
+              auth = {"Authorization": "Basic " + base64.b64encode(
+                  f'{os.environ["WP_USER"]}:{os.environ["WP_APP_PASSWORD"]}'.encode()).decode()}
+              r = requests.get(wp + "/wp-json/wp/v2/posts",
+                               params={"search": "副业日报", "status": "publish", "per_page": 20},
+                               headers=auth, timeout=30)
+              r.raise_for_status()
+              for p in r.json():
+                  t = p.get("title", {}).get("rendered", "")
+                  pdate = (p.get("date") or "")[:10]
+                  if "副业日报" in t and (today in t or pdate == today):
+                      post_content = p.get("content", {}).get("rendered", "")
+                      break
+          except Exception as e:
+              print("WP 查询失败，继续生成:", e)
+          live_ver = C.extract_renderer_version(post_content)
+          # 仅当线上当日文章渲染器版本过旧（或用户手动勾选 force）时，强制重渲染已累积内容以落地修复；
+          # 定时运行始终执行（由同日累积逻辑增量刷新，不再早退跳过，避免修复永不落地）。
+          force_rerender = (live_ver < C.RENDERER_VERSION and post_content != "") or force_update
+          open(envf, "a").write("DOCGEN_FORCE_RERENDER=%s\n" % ("1" if force_rerender else "0"))
+          open(out, "a").write("skip=0\n")
+          print("live_renderer_version=%s, current=%s, force_rerender=%s (event=%s)"
+                % (live_ver, C.RENDERER_VERSION, force_rerender, event))
+          PY
+
+      - name: 采集 + AI 生成 + 发布（高延迟 AI 收敛重试）
+        if: steps.preflight.outputs.skip != '1'
+        run: |
+          STEP_START=$(date +%s)
+          MAX_TRIES=2
+          for i in $(seq 1 $MAX_TRIES); do
+            echo "===== 第 $i/$MAX_TRIES 轮尝试（采集→AI→发布） ====="
+            if python scripts/fetch_signals.py \
+               && python scripts/generate_report.py \
+               && python scripts/publish_wp.py; then
+              STEP_END=$(date +%s)
+              echo "✅ 第 $i 轮成功完成日报生成与发布，本步骤耗时 $((STEP_END - STEP_START))s"
+              break
+            fi
+            if [ "$i" -lt "$MAX_TRIES" ]; then
+              echo "⚠️ 第 $i 轮失败（疑似网络抖动/源站超时），90s 后自愈重试…"
+              sleep 90
+            else
+              STEP_END=$(date +%s)
+              echo "❌ 已重试 $MAX_TRIES 次仍失败，本步骤总耗时 $((STEP_END - STEP_START))s"
+              exit 1
+            fi
+          done
+
+      - name: 保存状态缓存（seen.json / CID 快照 / 当日累积日报，更新后持久化，下次运行 restore-keys 回退到最新）
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state/
+          key: fuyrribao-state-${{ github.run_id }}
+
+      - name: 源抓取失败告警（非致命）
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request
+          p = "state/source_status.json"
+          if not os.path.exists(p):
+              raise SystemExit(0)
+          try:
+              d = json.load(open(p, encoding="utf-8"))
+          except Exception:
+              raise SystemExit(0)
+          status = d.get("status", {})
+          failed = [k for k, v in status.items() if not v.get("ok")]
+          if not failed:
+              print("✅ 所有内容源抓取正常")
+              raise SystemExit(0)
+          msg = "【副业日报】今日有 %d 个内容源抓取失败：%s\n请检查源可用性（不影响已成功源的日报生成）。" % (
+              len(failed), ", ".join(failed))
+          payload = json.dumps({"msgtype": "text", "text": {"content": msg}}).encode("utf-8")
+          url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0"
+          try:
+              req = urllib.request.Request(url, data=payload,
+                                           headers={"Content-Type": "application/json"}, method="POST")
+              urllib.request.urlopen(req, timeout=10)
+              print("已发送源失败告警:", failed)
+          except Exception as e:
+              print("源失败告警发送失败:", e)
+          PY
+
+      - name: 心跳提交（防 60天停用 + 回写状态）
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "$(TZ=Asia/Shanghai date '+%F %T')" > state/heartbeat.txt
+          git add state/heartbeat.txt || true
+          git diff --cached --quiet || git commit -m "daily: $(TZ=Asia/Shanghai date +%F) [heartbeat]"
+          git reset --hard
+          git clean -fd
+          git fetch origin
+          for j in 1 2 3; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
+              echo "✅ 状态已回写仓库"
+              break
+            fi
+            if [ -n "$(git ls-files -u)" ]; then
+              git checkout --theirs -- state/heartbeat.txt 2>/dev/null || true
+              git add -A 2>/dev/null || true
+              GIT_EDITOR=true git rebase --continue 2>/dev/null || true
+            fi
+            echo "git push 第 $j/3 次失败（可能远端已更新），5s 后重试…"
+            sleep 5
+          done
+
+      - name: 失败告警（企业微信机器人）
+        if: failure()
+        run: |
+          curl -s -o /dev/null -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0" \
+            -H "Content-Type: application/json" \
+            -d "{\"msgtype\":\"text\",\"text\":{\"content\":\"【副业日报】GitHub Actions 今日生成失败，请检查。\nrun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}}"

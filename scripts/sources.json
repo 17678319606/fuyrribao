@@ -1,0 +1,36 @@
+[
+  {
+    "id": "zhongnianren",
+    "type": "rss",
+    "url": "https://17678319606.github.io/tg-aggregator-cn-snapshot/zhongnianren/rss.xml",
+    "name": "中年指南",
+    "microblog": true
+  },
+  {
+    "id": "cid",
+    "type": "github_readme_diff",
+    "url": "https://raw.githubusercontent.com/1c7/chinese-independent-developer/master/README.md",
+    "name": "中文独立开发者",
+    "anchor": "https://github.com/1c7/chinese-independent-developer",
+    "snapshot": "state/cid_readme_snapshot.txt"
+  },
+  { "id": "v2ex", "type": "rss", "url": "https://www.v2ex.com/index.xml", "name": "V2EX" },
+  { "id": "sspai", "type": "rss", "url": "https://sspai.com/feed", "name": "少数派" },
+  { "id": "hn", "type": "rss", "url": "https://hnrss.org/frontpage", "name": "Hacker News" },
+  { "id": "producthunt", "type": "rss", "url": "https://www.producthunt.com/feed", "name": "Product Hunt" },
+  { "id": "indiehackers", "type": "rss", "url": "https://www.indiehackers.com/feed.xml", "name": "IndieHackers" },
+  { "id": "ruanyifeng", "type": "rss", "url": "https://www.ruanyifeng.com/blog/atom.xml", "name": "阮一峰科技周刊" },
+  { "id": "tmtpost", "type": "rss", "url": "https://www.tmtpost.com/rss", "name": "钛媒体" },
+  { "id": "ifanr", "type": "rss", "url": "https://www.ifanr.com/feed", "name": "爱范儿" },
+  { "id": "oschina", "type": "rss", "url": "https://www.oschina.net/news/rss", "name": "开源中国" },
+  { "id": "qbitai", "type": "rss", "url": "https://www.qbitai.com/feed", "name": "量子位" },
+  { "id": "jiqizhixin", "type": "rss", "url": "https://www.jiqizhixin.com/rss", "name": "机器之心" },
+  { "id": "github_trending_zh", "type": "github_trending", "url": "https://github.com/trending?since=daily&spoken_language_code=zh", "name": "GitHub 中文趋势榜" },
+  { "id": "w2solo", "type": "rss", "url": "https://www.w2solo.com/topics/feed", "name": "w2solo 独立开发者社区" },
+  { "id": "appinn", "type": "rss", "url": "https://www.appinn.com/feed/", "name": "小众软件（网站）" },
+  { "id": "appinn_forum", "type": "rss", "url": "https://meta.appinn.net/latest.rss", "name": "小众软件（论坛）" },
+  { "id": "geekpark", "type": "rss", "url": "https://www.geekpark.net/rss", "name": "极客公园" },
+  { "id": "woshipm", "type": "rss", "url": "https://www.woshipm.com/feed", "name": "人人都是产品经理" },
+  { "id": "growthhackers", "type": "rss", "url": "https://growthhackers.com/feed", "name": "GrowthHackers" },
+  { "id": "devto", "type": "rss", "url": "https://dev.to/feed", "name": "Dev.to" }
+]
