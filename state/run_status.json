@@ -1,0 +1,23 @@
+{
+  "date": "2026-08-15",
+  "final_run": false,
+  "ok": false,
+  "steps": {
+    "fetch": {
+      "ok": true,
+      "tail": " 0.4s，第 1/2 次）\n2026-08-15 11:49:26,378 INFO 源 geekpark: 抓到 30，新增 30\n2026-08-15 11:49:26,628 INFO 抓取成功 https://www.woshipm.com/feed（耗时 0.2s，第 1/2 次）\n2026-08-15 11:49:26,745 INFO 源 woshipm: 抓到 15，新增 15\n2026-08-15 11:49:29,576 WARNING 抓取 HTTP 0 https://growthhackers.com/feed（第 1/2 次），5s 后重试\n2026-08-15 11:49:35,321 WARNING 抓取 HTTP 0 https://growthhackers.com/feed（第 2/2 次），10s 后重试\n2026-08-15 11:49:35,321 WARNING RSS 抓取失败 GrowthHackers: 520 Server Error: <none> for url: https://growthhackers.com/feed\n2026-08-15 11:49:35,321 INFO 源 growthhackers: 抓到 0，新增 0\n2026-08-15 11:49:36,257 INFO 抓取成功 https://dev.to/feed（耗时 0.9s，第 1/2 次）\n2026-08-15 11:49:36,367 INFO 源 devto: 抓到 12，新增 12\n2026-08-15 11:49:36,377 INFO 候选总数=617，写入 /workspace/data/candidates-2026-08-15.json\n2026-08-15 11:49:36,385 INFO 完成。候选数=617"
+    },
+    "generate": {
+      "ok": false,
+      "tail": "2026-08-15 11:49:36,515 INFO 开始生成 2026-08-15 日报\n2026-08-15 11:49:36,525 ERROR 缺少任何 AI key（未配置 AI_API_KEY / AI_FALLBACK_KEY），无法生成。\nmissing AI key"
+    },
+    "wp": {
+      "ok": null,
+      "tail": "skipped（前置步骤失败）"
+    },
+    "wechat": {
+      "ok": null,
+      "tail": "skipped（前置步骤失败）"
+    }
+  }
+}
