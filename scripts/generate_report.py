@@ -965,7 +965,7 @@ def main():
     # 海外 Gemini 默认 gemini-flash-latest。用户可用 AI_MODEL/ai_model 显式覆盖。
     _default_model = "gemini-flash-latest"
     if "jinbufenzi" in _first_base:
-        _default_model = "qwen3.6-35b-a3b"
+        _default_model = "auto"
     model = (os.environ.get("AI_MODEL", "").strip() or os.environ.get("ai_model", "").strip()
              or _default_model)
     if _force_non_stream():
