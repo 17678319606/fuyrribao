@@ -42,15 +42,8 @@ env:
   ai_model: ${{ secrets.AI_MODEL || 'auto' }}
   # 原 Gemini（降级兜底；璇玑不可用时自动接管）
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-  # —— 公众号推送（IP 白名单代理） ——
-  WX_PUBLISH_MODE: ${{ secrets.WX_PUBLISH_MODE || 'freepublish' }}
-  WX_APPID: ${{ secrets.WX_APPID }}
-  WX_APPSECRET: ${{ secrets.WX_APPSECRET }}
-  WX_AUTHOR: ${{ secrets.WX_AUTHOR || '副业日报' }}
-  WX_FINAL_HOUR: ${{ secrets.WX_FINAL_HOUR || '19' }}
-  # 微信 API 代理：GitHub 动态 IP 不在白名单时，通过固定出口服务器转发请求
-  # 格式：http://IP:PORT（如 http://122.51.106.193:8888）
-  WX_PROXY_URL: ${{ secrets.WX_PROXY_URL }}
+  # 公众号推送已移交 WordPress 插件（fuyr-wechat-pusher）在源站直连微信 API，
+  # CI 不再注入任何 WX_* 密钥/代理；AppID/AppSecret 仅存于 WP 后台设置页。
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' && '1' || '0' }}
   # —— 企业微信通知 ——

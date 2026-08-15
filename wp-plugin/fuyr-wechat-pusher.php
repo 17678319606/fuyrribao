@@ -125,25 +125,107 @@ function fuyr_wxp_upload_file($token, $file_path, $mime) {
     return $data['media_id'];
 }
 
+/* ───────────────────────── 封面：底图 + 自动叠加北京时间 ─────────────────────────
+ * 设计：用户在设置页上传一张「底图」（如地图），WP 媒体库只保存这一张底图；
+ * 每次推送时由 GD 在底图上叠加「日期 + 时间」，生成临时 PNG 上传为微信封面素材，
+ * 用完即删，不落 WP 库。这样既保证每天封面带最新时间，又不在 WP 留下一堆图片。
+ */
+function fuyr_wxp_find_font($need_cjk = false) {
+    if ($need_cjk) {
+        $cjk = array(
+            '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+            '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
+            '/usr/share/fonts/truetype/arphic/uming.ttc',
+        );
+        foreach ($cjk as $f) { if (file_exists($f)) return $f; }
+        return '';
+    }
+    $latin = array(
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+    );
+    foreach ($latin as $f) { if (file_exists($f)) return $f; }
+    return '';
+}
+
+function fuyr_wxp_make_cover($base_path) {
+    // 无 GD → 直接退化为底图（仍能推送，只是没有叠加时间）
+    if (!extension_loaded('gd') || !function_exists('imagecreatefromstring')) {
+        return $base_path;
+    }
+    $bin = @file_get_contents($base_path);
+    if ($bin === false) { return $base_path; }
+    $img = @imagecreatefromstring($bin);
+    if ($img === false) { return $base_path; }
+
+    $w = imagesx($img); $h = imagesy($img);
+    $bj  = time() + 8 * 3600;
+    $date = gmdate('Y.m.d', $bj);   // 2026.08.15
+    $time = gmdate('H:i', $bj);     // 19:30
+
+    $white  = imagecolorallocate($img, 255, 255, 255);
+    $shadow = imagecolorallocate($img, 0, 0, 0);
+    $cjk    = fuyr_wxp_find_font(true);
+    $latin  = fuyr_wxp_find_font(false);
+    $font   = $cjk ?: $latin;
+
+    if ($font && file_exists($font)) {
+        $fs  = max(20, intval($w / 16));
+        $b1  = imagettfbbox($fs, 0, $font, $date);
+        $tw1 = $b1[2] - $b1[0];
+        $x1  = intval(($w - $tw1) / 2);
+        $y1  = intval($h - intval($fs * 2.4));
+        imagettftext($img, $fs, 0, $x1, $y1, $shadow, $font, $date);
+        imagettftext($img, $fs, 0, $x1, $y1, $white,  $font, $date);
+
+        $sub  = $cjk ? ('副业日报 · 每日更新 ' . $time) : ('Daily ' . $time);
+        $fs2  = max(12, intval($fs * 0.5));
+        $b2   = imagettfbbox($fs2, 0, $font, $sub);
+        $tw2  = $b2[2] - $b2[0];
+        $x2   = intval(($w - $tw2) / 2);
+        $y2   = $y1 + intval($fs * 1.3);
+        imagettftext($img, $fs2, 0, $x2, $y2, $shadow, $font, $sub);
+        imagettftext($img, $fs2, 0, $x2, $y2, $white,  $font, $sub);
+    } else {
+        // 无 TTF（极少见）：仅用内置字体画日期数字（仅 ASCII）
+        $x1 = intval(($w - 120) / 2);
+        imagestring($img, 5, $x1, intval($h - 54), $date, $white);
+        imagestring($img, 4, $x1, intval($h - 32), $time, $white);
+    }
+
+    $tmp = tempnam(sys_get_temp_dir(), 'fuyrcov');
+    if ($tmp === false) { imagedestroy($img); return $base_path; }
+    $tmp .= '.png';
+    if (!imagepng($img, $tmp)) { imagedestroy($img); @unlink($tmp); return $base_path; }
+    imagedestroy($img);
+    return $tmp;
+}
+
 function fuyr_wxp_ensure_thumb($token) {
     $o = fuyr_wxp_opts();
-    $cached    = get_option('fuyr_wxp_thumb_media_id');
-    $cached_for = get_option('fuyr_wxp_thumb_for');
     $cover_id  = intval($o['cover_id']);
-    if ($cached && $cached_for == $cover_id && $cover_id) {
-        return $cached;
-    }
     $file_path = $cover_id ? get_attached_file($cover_id) : '';
     if (empty($file_path) || !file_exists($file_path)) {
-        return new WP_Error('no_cover', '未设置封面图，无法获取 thumb_media_id（请在设置页选择封面）');
+        return new WP_Error('no_cover', '未设置封面底图，无法生成封面（请在设置页上传一张底图/地图）');
     }
-    $mime = get_post_mime_type($cover_id) ?: 'image/jpeg';
-    $mid  = fuyr_wxp_upload_file($token, $file_path, $mime);
-    if (is_wp_error($mid)) {
-        return $mid;
-    }
-    update_option('fuyr_wxp_thumb_media_id', $mid);
-    update_option('fuyr_wxp_thumb_for', $cover_id);
+    // 按「底图ID + 当天日期」缓存：同日重复保存不重复上传；跨天自动换新日期封面
+    $cache_key = 'fuyr_wxp_thumb_' . $cover_id . '_' . fuyr_wxp_bj_date();
+    $cached = get_transient($cache_key);
+    if ($cached) { return $cached; }
+
+    // GD 合成带时间的封面（临时文件，不入库）
+    $cover  = fuyr_wxp_make_cover($file_path);
+    if (is_wp_error($cover)) { return $cover; }
+    $is_tmp = ($cover !== $file_path);
+    $mime   = $is_tmp ? 'image/png' : (get_post_mime_type($cover_id) ?: 'image/jpeg');
+    $mid    = fuyr_wxp_upload_file($token, $cover, $mime);
+    if ($is_tmp && file_exists($cover)) { @unlink($cover); }  // 用完即删，不落 WP 库
+    if (is_wp_error($mid)) { return $mid; }
+
+    set_transient($cache_key, $mid, 86400);
     return $mid;
 }
 
@@ -152,6 +234,8 @@ function fuyr_wxp_render_content($post) {
     $content = $post->post_content;
     // 移除 <style> 块（微信会剥离；保险移除）
     $content = preg_replace('/<style[^>]*>.*?<\/style>/is', '', $content);
+    // 移除 HTML 注释（render 时插入的渲染器标记等，微信端无意义）
+    $content = preg_replace('/<!--.*?-->/s', '', $content);
     $wrap = 'max-width:677px;width:100%;margin:0 auto;padding:16px;'
           . "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;"
           . 'line-height:1.8;color:#2b2b2b;';
@@ -407,8 +491,8 @@ function fuyr_wxp_settings_page() {
                             <?php if (intval($o['cover_id'])) { echo wp_get_attachment_image(intval($o['cover_id']), 'medium'); } ?>
                         </div>
                         <input type="hidden" id="fuyr_cover_id" name="fuyr_wxp_settings[cover_id]" value="<?php echo intval($o['cover_id']); ?>">
-                        <button type="button" class="button" id="fuyr_cover_btn">选择封面图</button>
-                        <p class="description">用作公众号图文封面（thumb_media_id）。建议尺寸 900×383 或 1:1；公众号要求封面图。</p>
+                        <button type="button" class="button" id="fuyr_cover_btn">选择封面图（底图）</button>
+                        <p class="description">上传一张<strong>底图</strong>（如地图风格），插件会在其上自动叠加<strong>北京时间日期/时间</strong>作封面，WP 媒体库只保存这张底图，叠加后的图仅临时上传微信、不落库。建议尺寸 900×383 或 1:1。需服务器启用 PHP-GD（常见主机默认已开）。</p>
                     </td>
                 </tr>
             </table>

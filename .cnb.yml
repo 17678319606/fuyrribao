@@ -1,13 +1,12 @@
-# 副业日报 CNB 流水线（采集 → AI生成 → WP发布 → 公众号推送 → 企业微信通知，单仓双推）
+# 副业日报 CNB 流水线（主力 CI：采集 → AI生成 → WP发布 → 企业微信通知）
 # ─────────────────────────────────────────────────────────────────────
 # 时区：Asia/Shanghai（北京时间）。crontab 直接写北京时间，无需换算 UTC。
-# 每天两次定时：06:00（晨间首版，WP 增量；公众号未到末次触发，跳过）
-#             19:00（末次触发，WP 增量 + 公众号推送当日最全版 + 汇总通知）
-# AI 只跑一次（增量累积：仅新信号调 AI）；WP 每次增量更新同日文章；
-#   公众号仅在末次触发(北京≥19点)发一次（WX_FINAL_HOUR 默认 19）；失败也发企业微信告警。
+# 每天两次定时：06:00（晨间首版，WP 增量）/ 19:00（晚间更新 + 汇总通知）。
+# 公众号推送：已移交 WordPress 插件 fuyr-wechat-pusher 在源站直连微信 API（利用服务器已在
+#   白名单的出口 IP），CI 不再调微信；WX_PUSH_VIA_WP=1 让 run_daily.py 跳过 wechat 步骤，避免双重推送。
+# 封面：由 WP 插件在源站用 GD 自动合成（底图 + 北京日期/时间），CI 不生成封面，故无需中文字体。
 # 密钥：从秘钥仓库 jinbufenzi/fuyrribao-secrets/env.yml 注入（imports），绝不硬编码。
-#   修改密钥只需在秘钥仓库网页编辑 env.yml，无需改代码或重新推送。
-# 封面：「副业日报 + 日期」由 generate_cover 动态生成（依赖 fonts-noto-cjk 免费字体）。
+#   公众号 AppID/AppSecret 不在此处（只在 WP 后台设置页），CI 只需要 AI + WP + 企业微信通知 三类密钥。
 # 注意：不监听 push 事件，避免心跳回写再次触发流水线形成死循环。
 # 触发方式：crontab ×2（系统定时）/ web_trigger（网页运行）/ api_trigger（Open API build/start）。
 
@@ -19,19 +18,17 @@
     runner:
       cpus: 1
     stages:
-      - name: 采集-生成-WP-公众号-通知
+      - name: 采集-生成-WP-通知
         script: |
           set -e
-          # 安装中文字体（封面「副业日报」需要；失败不影响其他步骤）
-          apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq fonts-noto-cjk >/dev/null 2>&1 || true
           pip install --quiet requests beautifulsoup4 feedparser lxml pysocks pillow
-          # 单入口编排：抓取→生成→发WP→发公众号→通知（通知必定执行，失败也报）
+          # 单入口编排：抓取→生成→发WP（公众号由 WP 插件处理）→通知（通知必定执行，失败也报）
           python scripts/run_daily.py
 
 main:
-  # 晨间首版（北京 06:00）—— WP 增量；公众号未到末次触发，自动跳过
+  # 晨间首版（北京 06:00）—— WP 增量（公众号由 WP 插件在 ≥19 时自动推）
   "crontab: 0 6 * * *": !reference [.cnb-job]
-  # 末次触发（北京 19:00）—— WP 增量 + 公众号推送当日最全版 + 汇总通知
+  # 末次触发（北京 19:00）—— WP 增量更新当日最全版（发布后触发 WP 插件推公众号）+ 汇总通知
   "crontab: 0 19 * * *": !reference [.cnb-job]
   # 网页「运行」按钮手动触发（验证 / 补发，不形成循环）
   web_trigger: !reference [.cnb-job]
