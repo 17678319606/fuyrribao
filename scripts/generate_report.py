@@ -491,7 +491,7 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                 {"role": "user", "content": user_prompt},
             ],
         }
-        # 国内网关 ai.jinbufenzi.com 默认模型为 qwen3.6-35b-a3b（推理模型）：
+        # 国内网关 ai.jinbufenzi.com 默认模型为 auto（网关自动选最优模型）：
         # 复杂/长 prompt 会进入 thinking 阶段，慢且易被 EdgeOne 源站超时（524）截断，
         # 导致流式只收到 reasoning、content 为空 → 整批失败。关闭 thinking 可显著缩短生成、
         # 规避 524/空流，且 Qwen3 关闭思考后结构化输出仍正常。仅对 jinbufenzi 网关加此参数，
@@ -961,7 +961,7 @@ def main():
     fallback_key = (os.environ.get("AI_SIDEHUSTLE_API_KEY", "").strip()
                     or os.environ.get("AI_FALLBACK_KEY", "").strip()
                     or os.environ.get("ai_api_key", "").strip())
-    # 模型默认值随网关自适应：国内网关 ai.jinbufenzi.com 默认 qwen3.6-35b-a3b；
+    # 模型默认值随网关自适应：国内网关 ai.jinbufenzi.com 默认 auto（网关自动选模型）；
     # 海外 Gemini 默认 gemini-flash-latest。用户可用 AI_MODEL/ai_model 显式覆盖。
     _default_model = "gemini-flash-latest"
     if "jinbufenzi" in _first_base:
