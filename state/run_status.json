@@ -1,15 +1,15 @@
 {
   "date": "2026-08-15",
-  "final_run": false,
+  "final_run": true,
   "ok": false,
   "steps": {
     "fetch": {
       "ok": true,
-      "tail": " 1.8s，第 1/2 次）\n2026-08-15 13:29:00,872 INFO 源 geekpark: 抓到 30，新增 30\n2026-08-15 13:29:01,154 INFO 抓取成功 https://www.woshipm.com/feed（耗时 0.3s，第 1/2 次）\n2026-08-15 13:29:01,284 INFO 源 woshipm: 抓到 15，新增 15\n2026-08-15 13:29:02,108 WARNING 抓取 HTTP 0 https://growthhackers.com/feed（第 1/2 次），5s 后重试\n2026-08-15 13:29:07,735 WARNING 抓取 HTTP 0 https://growthhackers.com/feed（第 2/2 次），10s 后重试\n2026-08-15 13:29:07,735 WARNING RSS 抓取失败 GrowthHackers: 520 Server Error: <none> for url: https://growthhackers.com/feed\n2026-08-15 13:29:07,735 INFO 源 growthhackers: 抓到 0，新增 0\n2026-08-15 13:29:09,034 INFO 抓取成功 https://dev.to/feed（耗时 1.3s，第 1/2 次）\n2026-08-15 13:29:09,163 INFO 源 devto: 抓到 12，新增 12\n2026-08-15 13:29:09,173 INFO 候选总数=617，写入 /workspace/data/candidates-2026-08-15.json\n2026-08-15 13:29:09,181 INFO 完成。候选数=617"
+      "tail": " 1.0s，第 1/2 次）\n2026-08-15 13:42:17,405 INFO 源 geekpark: 抓到 30，新增 30\n2026-08-15 13:42:17,676 INFO 抓取成功 https://www.woshipm.com/feed（耗时 0.3s，第 1/2 次）\n2026-08-15 13:42:17,807 INFO 源 woshipm: 抓到 15，新增 15\n2026-08-15 13:42:18,428 WARNING 抓取 HTTP 0 https://growthhackers.com/feed（第 1/2 次），5s 后重试\n2026-08-15 13:42:24,165 WARNING 抓取 HTTP 0 https://growthhackers.com/feed（第 2/2 次），10s 后重试\n2026-08-15 13:42:24,165 WARNING RSS 抓取失败 GrowthHackers: 520 Server Error: <none> for url: https://growthhackers.com/feed\n2026-08-15 13:42:24,165 INFO 源 growthhackers: 抓到 0，新增 0\n2026-08-15 13:42:28,789 INFO 抓取成功 https://dev.to/feed（耗时 4.6s，第 1/2 次）\n2026-08-15 13:42:28,862 INFO 源 devto: 抓到 12，新增 12\n2026-08-15 13:42:28,872 INFO 候选总数=617，写入 /workspace/data/candidates-2026-08-15.json\n2026-08-15 13:42:28,881 INFO 完成。候选数=617"
     },
     "generate": {
       "ok": false,
-      "tail": "5 13:32:50,378 WARNING Gemini 原生返回 429（瞬时），4.0s 后重试 (2/3)\n2026-08-15 13:32:54,379 INFO Gemini 原生请求 [base=https://generativelanguage.googleapis.com/v1beta, model=gemini-flash-latest] (stream) 第 3/3 次\n2026-08-15 13:32:54,804 WARNING Gemini 原生返回 429（瞬时），6.0s 后重试 (3/3)\n2026-08-15 13:33:00,804 WARNING Gemini 原生调用失败（base=https://generativelanguage.googleapis.com/v1beta）：Gemini 原生瞬时服务端错误 429\n2026-08-15 13:33:00,804 WARNING 流式多端点均失败，尝试非流式兜底（整包返回）一次…\n2026-08-15 13:33:01,224 WARNING 非流式兜底请求失败（base=https://generativelanguage.googleapis.com/v1beta）：429 Client Error: Too Many Requests for url: https://generativelanguage.googleapis.com/v1beta/chat/completions\n2026-08-15 13:33:01,224 ERROR AI 调用失败（第 4/4 次生成，已用 231.9s）：所有候选 base_url（1）与端点均失败，总耗时 13.7s，最后错误：Gemini 原生瞬时服务端错误 429\nAI call failed after retries"
+      "tail": "5 13:46:09,224 WARNING Gemini 原生返回 429（瞬时），4.0s 后重试 (2/3)\n2026-08-15 13:46:13,225 INFO Gemini 原生请求 [base=https://generativelanguage.googleapis.com/v1beta, model=gemini-flash-latest] (stream) 第 3/3 次\n2026-08-15 13:46:13,597 WARNING Gemini 原生返回 429（瞬时），6.0s 后重试 (3/3)\n2026-08-15 13:46:19,598 WARNING Gemini 原生调用失败（base=https://generativelanguage.googleapis.com/v1beta）：Gemini 原生瞬时服务端错误 429\n2026-08-15 13:46:19,598 WARNING 流式多端点均失败，尝试非流式兜底（整包返回）一次…\n2026-08-15 13:46:19,975 WARNING 非流式兜底请求失败（base=https://generativelanguage.googleapis.com/v1beta）：429 Client Error: Too Many Requests for url: https://generativelanguage.googleapis.com/v1beta/chat/completions\n2026-08-15 13:46:19,975 ERROR AI 调用失败（第 4/4 次生成，已用 230.9s）：所有候选 base_url（1）与端点均失败，总耗时 13.5s，最后错误：Gemini 原生瞬时服务端错误 429\nAI call failed after retries"
     },
     "wp": {
       "ok": null,
