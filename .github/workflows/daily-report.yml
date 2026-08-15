@@ -52,6 +52,12 @@ env:
   AI_PROXY_POOL: ${{ secrets.AI_PROXY_POOL }}
   AI_REQUEST_TIMEOUT: ${{ secrets.AI_REQUEST_TIMEOUT }}
   AI_FORCE_NON_STREAM: ${{ secrets.AI_FORCE_NON_STREAM }}
+  # —— 公众号推送（可选；不填 WX_PUBLISH_MODE 则仅发 WP）——
+  WX_PUBLISH_MODE: ${{ secrets.WX_PUBLISH_MODE }}
+  WX_APPID: ${{ secrets.WX_APPID }}
+  WX_APPSECRET: ${{ secrets.WX_APPSECRET }}
+  WX_AUTHOR: ${{ secrets.WX_AUTHOR }}
+  WX_FINAL_HOUR: ${{ secrets.WX_FINAL_HOUR }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   FORCE_UPDATE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' && '1' || '0' }}
 
@@ -147,6 +153,14 @@ jobs:
               exit 1
             fi
           done
+
+      - name: 推送公众号（可选，未配置 WX_PUBLISH_MODE 则跳过；失败不阻断当日 WP 发布）
+        if: steps.preflight.outputs.skip != '1'
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq >/dev/null 2>&1 && sudo apt-get install -y -qq fonts-noto-cjk >/dev/null 2>&1 || true
+          python -m pip install --quiet pillow
+          python scripts/publish_wechat.py || echo "⚠️ 公众号推送失败（不影响 WordPress 已发布）"
 
       - name: 保存状态缓存（seen.json / CID 快照 / 当日累积日报，更新后持久化，下次运行 restore-keys 回退到最新）
         if: always()

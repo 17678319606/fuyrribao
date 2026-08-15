@@ -1,10 +1,13 @@
-# 副业日报 CNB 流水线（crontab 定时 + 手动/API 触发）
+# 副业日报 CNB 流水线（采集 → AI生成 → WP发布 → 公众号推送，单仓双推）
 # ─────────────────────────────────────────────────────────────────────
 # 时区：Asia/Shanghai（北京时间）。对应原 GitHub Actions 的 UTC 22:01 / 11:40 / 12:10
-#       即 北京 06:01（晨间首版）/ 19:40（晚间补发1）/ 20:10（晚间补发2）。
-# 密钥：全部来自 CNB 仓库「设置 → 环境变量」，绝不硬编码（WP_APP_PASSWORD /
-#       GEMINI_API_KEY / AI_SIDEHUSTLE_API_KEY 等需用户填入，与 GitHub Secrets 同值）。
-# 增量累积：state/ 通过 git 回写持久化，保证同日多时段触发是「增量刷新」而非「全量重建」。
+#       即 北京 06:01（晨间首版）/ 19:40（晚间补发1）/ 20:10（晚间补发2 + 公众号末次推送）。
+# AI 只跑一次（增量累积：仅新信号调 AI）；WP 每次增量更新同日文章；公众号仅在末次触发(北京≥20点)发一次。
+# 密钥：全部来自 CNB 仓库「设置 → 环境变量」，绝不硬编码。需用户填入：
+#   - AI：GEMINI_API_KEY（或 AI_API_KEY / AI_FALLBACK_KEY）、AI_SIDEHUSTLE_API_KEY
+#   - WP：WP_APP_PASSWORD
+#   - 公众号（可选，不填则仅发 WP）：WX_APPID、WX_APPSECRET、WX_PUBLISH_MODE(mass/freepublish/draft)、WX_AUTHOR、WX_FINAL_HOUR(默认20)
+# 封面：「副业日报 + 日期」由 generate_cover 动态生成（依赖 fonts-noto-cjk 免费字体）。
 # 注意：不监听 push 事件，避免心跳回写再次触发流水线形成死循环。
 # 触发方式：
 #   - crontab ×3 ：系统定时（需 push 后调用 crontab/sync 注册）
@@ -17,13 +20,17 @@
     runner:
       cpus: 1
     stages:
-      - name: 采集-生成-发布
+      - name: 采集-生成-WP发布-公众号推送
         script: |
           set -e
-          pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
+          # 安装中文字体（封面图渲染「副业日报」需要；失败不影响其他步骤）
+          apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq fonts-noto-cjk >/dev/null 2>&1 || true
+          pip install --quiet requests beautifulsoup4 feedparser lxml pysocks pillow
           python scripts/fetch_signals.py
           python scripts/generate_report.py
           python scripts/publish_wp.py
+          # 公众号推送：未配置 WX_PUBLISH_MODE 会自动跳过；失败不阻断当日 WP 已发布内容
+          python scripts/publish_wechat.py || echo "⚠️ 公众号推送失败（不影响 WordPress 已发布）"
           # —— 增量累积状态回写（持久化 state/，供下次运行增量刷新）——
           git config user.email "bot@cnb.cool"
           git config user.name "cnb-bot"
@@ -33,11 +40,11 @@
           git push "https://cnb:${CNB_TOKEN}@cnb.cool/jinbufenzi/fuyrribao.git" HEAD:main 2>&1 | tail -3 || true
 
 main:
-  # 晨间首版（北京 06:01）
+  # 晨间首版（北京 06:01）—— WP 增量；公众号未到末次触发，自动跳过
   "crontab: 1 6 * * *": !reference [.cnb-job]
-  # 晚间补发 1（北京 19:40）
+  # 晚间补发 1（北京 19:40）—— WP 增量；公众号未到末次触发，自动跳过
   "crontab: 40 19 * * *": !reference [.cnb-job]
-  # 晚间补发 2（北京 20:10）
+  # 晚间补发 2（北京 20:10）—— WP 增量 + 公众号末次推送（北京≥20点放行）
   "crontab: 10 20 * * *": !reference [.cnb-job]
   # 网页「运行」按钮手动触发（验证 / 补发，不形成循环）
   web_trigger: !reference [.cnb-job]
