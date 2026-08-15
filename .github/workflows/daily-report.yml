@@ -21,6 +21,10 @@ on:
         description: '强制更新今日文章（覆盖已发布内容）'
         required: false
         default: 'false'
+      target_date:
+        description: '目标日期(YYYY-MM-DD)，用于重生成/清洁历史文章；留空=今天'
+        required: false
+        default: ''
 
 permissions:
   contents: write               # 仅用于提交心跳 / 去重状态 / 产物回仓库
@@ -31,6 +35,7 @@ concurrency:
 
 env:
   TZ: Asia/Shanghai
+  DOCGEN_TARGET_DATE: ${{ github.event.inputs.target_date }}
   # —— WordPress ——（地址/账号/分类已在代码默认，这里只放应用密码）
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   # —— AI 后端：璇玑网关地址(api.jinbufenzi.com/v1)与模型(qwen3.6-35b-a3b)已在代码默认，
@@ -83,7 +88,8 @@ jobs:
           out = os.environ.get("GITHUB_OUTPUT", "/dev/null")
           envf = os.environ.get("GITHUB_ENV", "/dev/null")
           BJ = datetime.timezone(datetime.timedelta(hours=8))
-          today = datetime.datetime.now(BJ).strftime("%Y-%m-%d")
+          target_date = os.environ.get("DOCGEN_TARGET_DATE", "").strip()
+          today = target_date or datetime.datetime.now(BJ).strftime("%Y-%m-%d")
           event = os.environ.get("GITHUB_EVENT_NAME", "")
           force_update = os.environ.get("FORCE_UPDATE", "") == "1"
           post_content = ""
@@ -112,7 +118,7 @@ jobs:
           # 末波需输出「覆盖全天」的心法总结，并放宽上限至 60 条；非末波（晨间首波）上限 30 条。
           # 该值在 preflight 写出到 GITHUB_ENV，供 generate_report.py 读取（覆盖其回退判定）。
           bj_hour = datetime.datetime.now(BJ).hour
-          is_final = (event == "workflow_dispatch") or bj_hour >= 19 or bj_hour < 6
+          is_final = (event == "workflow_dispatch") or bool(target_date) or bj_hour >= 19 or bj_hour < 6
           open(envf, "a").write("DOCGEN_IS_FINAL=%s\n" % ("1" if is_final else "0"))
           open(out, "a").write("skip=0\n")
           print("live_renderer_version=%s, current=%s, force_rerender=%s, is_final=%s (event=%s)"

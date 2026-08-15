@@ -31,6 +31,11 @@ def beijing_now():
 
 
 def date_str(dt=None):
+    # 支持「目标日期」覆盖（用于重生成/清洁历史文章）：经 DOCGEN_TARGET_DATE 注入。
+    # 正常定时/手动运行该变量为空，回退到北京时间今天。
+    override = os.environ.get("DOCGEN_TARGET_DATE", "").strip()
+    if override:
+        return override
     return (dt or beijing_now()).strftime("%Y-%m-%d")
 
 

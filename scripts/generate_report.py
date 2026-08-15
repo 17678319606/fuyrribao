@@ -943,6 +943,99 @@ def _actionable_check(report):
     return report, removed
 
 
+# —— 同玩法 / 同地域服务聚类去重（v4.3，L3 保险）——
+# 目的：拦截"同一套玩法（相同服务品类 + 相同地域市场）在同一模块里重复堆砌≥3条"的冗余，
+# 如"武汉 SEO/GEO 三连"。同时严格"地域中性"：单条地域内容（地域=获客渠道/目标客户定位）
+# 永远不参与聚类、绝不降权；只有「同模块 + 同地域 + 同服务品类」≥3 条才收口，保留最具实质的 1 条。
+# 识别维度（地域/服务品类）是通用类目，非"人名/关键词黑名单"，不违反"按共性筛、不打补丁"铁律。
+
+# 通用地域类目（用于聚类维度，非排除名单）：覆盖主要城市/省份/区域
+_REGION_TOKENS = [
+    "北京", "上海", "广州", "深圳", "成都", "杭州", "武汉", "南京", "重庆", "西安",
+    "苏州", "天津", "长沙", "郑州", "青岛", "厦门", "宁波", "无锡", "佛山", "合肥",
+    "济南", "东莞", "福州", "昆明", "大连", "沈阳", "哈尔滨", "石家庄", "太原", "南昌",
+    "南宁", "贵阳", "海口", "常州", "温州", "泉州", "绍兴", "嘉兴", "南通", "金华",
+    "珠海", "惠州", "中山", "保定", "廊坊", "烟台", "兰州", "潍坊", "徐州", "临沂",
+    "全国", "海外", "一线城市", "二三线城市",
+]
+
+# 通用服务/玩法类目映射（用于聚类维度，非排除名单）：多个近义 token 归并到同一类目，
+# 避免"武汉 SEO"与"武汉 GEO"被当成不同玩法而漏聚；仅当这些词与地域同时出现且同模块≥3条
+# 时才触发去重，绝不作为排除规则。
+_SERVICE_MAP = {
+    "seo": "SEO/GEO优化", "geo": "SEO/GEO优化", "搜索优化": "SEO/GEO优化", "搜索排名": "SEO/GEO优化",
+    "代运营": "代运营", "建站": "建站/官网", "官网": "建站/官网", "小程序": "小程序",
+    "公众号": "公众号运营", "私域": "私域/引流", "引流": "私域/引流", "涨粉": "私域/引流",
+    "带货": "带货/直播", "直播": "带货/直播", "培训": "培训/课程", "课程": "培训/课程",
+    "知识付费": "培训/课程", "付费社群": "培训/课程", "矩阵": "矩阵/账号",
+    "外包": "外包/代办", "代办": "外包/代办", "中介": "中介", "saas": "SaaS",
+}
+
+
+def _item_text(it):
+    if not isinstance(it, dict):
+        return ""
+    parts = []
+    for k in ("title", "signal", "target_customer", "value_proposition",
+              "how_to_mvp", "acquisition_channel", "monetization", "startup_cost",
+              "replicability", "perspective"):
+        v = it.get(k)
+        if v:
+            parts.append(str(v))
+    return " ".join(parts)
+
+
+def _detect_region(text):
+    tl = text.lower()
+    for r in _REGION_TOKENS:
+        if r.lower() in tl:
+            return r
+    return ""
+
+
+def _detect_service(text):
+    tl = text.lower()
+    for s in _SERVICE_MAP:
+        if s.lower() in tl:
+            return _SERVICE_MAP[s]
+    return ""
+
+
+def _cluster_dedup(report, min_cluster=3, keep=1):
+    """L3 保险：同模块 + 同地域 + 同服务品类 的三元组，若 ≥ min_cluster 条，
+    仅保留最具实质（字段文本最长）的 keep 条，其余标记「聚类冗余」剔除。
+    地域中性：单条地域内容（无同模块同服务≥3）永不触达；地域仅作为签名的一个中性成分。"""
+    removed = 0
+    mods = report.get("modules", {})
+    for mod in C.MODULES:
+        items = mods.get(mod, [])
+        if len(items) < min_cluster:
+            continue
+        groups = {}
+        for idx, it in enumerate(items):
+            txt = _item_text(it)
+            region = _detect_region(txt)
+            service = _detect_service(txt)
+            # 仅当「地域 + 服务」同时命中才参与聚类；纯地域内容或纯话题内容不聚类
+            if not (region and service):
+                continue
+            sig = "%s|%s|%s" % (mod, region, service)
+            groups.setdefault(sig, []).append(idx)
+        drop = set()
+        for sig, idxs in groups.items():
+            if len(idxs) >= min_cluster:
+                # 保留字段文本最长的 keep 条（最具实质），其余剔除
+                ranked = sorted(idxs, key=lambda i: len(_item_text(items[i])), reverse=True)
+                for i in ranked[keep:]:
+                    drop.add(i)
+                    removed += 1
+                    LOG.warning("【聚类冗余剔除】%s -> 同模块+同地域+同服务≥%d 条，保留最具实质 %d 条 | 标题: %s",
+                                mod, min_cluster, keep, (items[i].get("title") or "")[:60])
+        if drop:
+            mods[mod] = [it for i, it in enumerate(items) if i not in drop]
+    return report, removed
+
+
 # 画布字段 key（与 publish_wp.CANVAS_FIELDS 对应）；用于骨架判定
 _CANVAS_KEYS = (
     "signal", "target_customer", "value_proposition", "how_to_mvp",
@@ -1040,6 +1133,11 @@ def _screen_system_prompt():
         "- 3-4：沾边但信息增量低，属于「知道了也没什么用」；\n"
         "- 1-2：勉强相关但基本是凑数的；\n"
         "- 0：不相关或上述七类垃圾。\n\n"
+        "## v4.3 新增（同玩法聚类 + 信息增量硬门槛 + 第三人称豁免 + 地域中性）\n"
+        "8) 同玩法/同窄地域服务聚类冗余：同一套玩法（相同服务品类 + 相同地域市场）重复出现≥3条、后出现的只是换说法重复同一 offer → score=0，丢弃（仅保留最有信息增量的一条）。\n"
+        "信息增量硬门槛：通过项必须至少命中一个真料标签（真平台/真工具/真产品名、具体数字、≥2步步骤、可定位人群/场景），否则判⑦正确废话。\n"
+        "第三人称转化豁免收紧：第三人称报道（某大厂人/某公司想做X）仅当提炼卡含≥1个非套话核心行动字段(MVP/获客/变现)且≥1个真料标签才通过，否则归①直接剔除。\n"
+        "地域中性铁律：地域永远不是负信号；地域=获客渠道/目标客户定位的增长内容100%保留，绝不因出现地域词单独降权；只有同模块+同地域+同服务品类≥3条才按第8类聚类收口。\n\n"
         "只输出 JSON：{\"picks\":[{\"id\":\"与输入完全一致的原始 id\","
         "\"score\":1-10,\"reason\":\"一句话理由（必须说明为什么对副业读者有具体价值）\"}]}。"
     )
@@ -1362,7 +1460,7 @@ def main():
                 f"{acc_block}\n"
                 f"【本次新增待筛选信号】（JSON，请从中严格筛选符合主题与质量门槛的条目，补充进各模块）：\n"
                 f"```json\n{new_block}\n```\n"
-                f"请严格按 SKILL.md（v4.2 老创业人 · 严格筛选版（AI 自评过滤·按共性筛））规则，输出【完整】日报 JSON："
+                f"请严格按 SKILL.md（v4.3 老创业人 · 严格筛选版（AI 自评过滤·按共性筛·同玩法聚类））规则，输出【完整】日报 JSON："
                 f"已收录 + 新增 去重合并，三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均）；"
                 f"daily_summary.methodology 必须覆盖【全部】条目（已收录 + 新增）提炼出的一天可复用方法论。"
                 f"生成前请再自检一次：每条的 MVP/获客/变现/观点 是否真的给了读者可执行的动作？"                f"凡是「关于别人的事（第三人称描述）」「只有方向没步骤」「全是形容词没数字」的条目，"                f"不要写进日报，直接跳过——宁可少几条，也不放凑数内容。"
@@ -1374,7 +1472,7 @@ def main():
             user_prompt = (
                 f"今天是 {today}（北京时间）。本日报两波更新，今日首波即末波（此前无早波收录）。\n"
                 f"以下是当日【新增】信号（JSON）：\n```json\n{new_block}\n```\n"
-                f"请严格按 SKILL.md（v4.2 老创业人 · 严格筛选版（AI 自评过滤·按共性筛））规则，输出日报 JSON："
+                f"请严格按 SKILL.md（v4.3 老创业人 · 严格筛选版（AI 自评过滤·按共性筛·同玩法聚类））规则，输出日报 JSON："
                 f"三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均，可某模块为空），宁缺毋滥。"
                 f"生成前请再自检一次：每条的 MVP/获客/变现/观点 是否真的给了读者可执行的动作？"                f"凡是「关于别人的事（第三人称描述）」「只有方向没步骤」「全是形容词没数字」的条目，"                f"不要写进日报，直接跳过——宁可少几条，也不放凑数内容。"
             )
@@ -1386,7 +1484,7 @@ def main():
                 f"今天是 {today}（北京时间）。以下是已完成去重的当日【新增】信号（JSON），"
                 f"请仅基于这些新增信号生成条目，勿重复已有内容：\n"
                 f"```json\n{new_block}\n```\n"
-                f"请严格按 SKILL.md（v4.2 老创业人 · 严格筛选版（AI 自评过滤·按共性筛））规则，输出 ai-sidehustle-report 日报 JSON。"
+                f"请严格按 SKILL.md（v4.3 老创业人 · 严格筛选版（AI 自评过滤·按共性筛·同玩法聚类））规则，输出 ai-sidehustle-report 日报 JSON。"
                 f"本波三模块总条数 ≤ {wave_cap} 条（按质量分配，不平均，可某模块为空），宁缺毋滥。"
                 f"生成前请再自检一次：每条的 MVP/获客/变现/观点 是否真的给了读者可执行的动作？"                f"凡是「关于别人的事（第三人称描述）」「只有方向没步骤」「全是形容词没数字」的条目，"                f"不要写进日报，直接跳过——宁可少几条，也不放凑数内容。"
             )
@@ -1446,6 +1544,10 @@ def main():
                 LOG.warning("新增批次全被剔除为空心，跳过该批次（保留已累积 %d 条）。", acc_total)
                 report = None
                 break
+            # v4.3 L3：同玩法/同地域服务聚类去重（地域中性，仅同模块+同地域+同服务≥3才收口）
+            report, cluster_removed = _cluster_dedup(report)
+            if cluster_removed > 0:
+                LOG.warning("【聚类去重】剔除 %d 条同玩法/同地域服务冗余", cluster_removed)
             total = sum(len(report.get("modules", {}).get(k, [])) for k in C.MODULES)
             if total == 0 and len(new_signals) > 0:
                 LOG.warning("AI 返回 0 条但候选信号有 %d 条（疑似空生成），重生成（%d/%d）",
