@@ -47,6 +47,17 @@ LOG = C.get_logger()
 
 WX_API = "https://api.weixin.qq.com/cgi-bin"
 
+# 微信 IP 白名单代理：GitHub Actions 动态 IP 不在白名单时，
+# 通过固定出口服务器（如反代/源站）代理微信 API 请求。
+# 设置 WX_PROXY_URL（含协议，如 http://x.x.x.x:8888）即可启用；留空则直连。
+_WX_PROXY = os.environ.get("WX_PROXY_URL", "").strip()
+_WX_PROXIES = {"http": _WX_PROXY, "https": _WX_PROXY} if _WX_PROXY else None
+
+if _WX_PROXY:
+    LOG.info("微信 API 代理已启用: %s（出口 IP 将匹配白名单）", _WX_PROXY)
+else:
+    LOG.info("微信 API 直连模式（无代理）")
+
 MODULES = [
     ("project_opportunities", "项目机会库"),
     ("growth_operations", "增长运营"),
@@ -206,7 +217,7 @@ def render_wechat(report):
 
 def get_token(appid, secret):
     url = f"{WX_API}/token?grant_type=client_credential&appid={appid}&secret={secret}"
-    r = requests.get(url, timeout=20)
+    r = requests.get(url, timeout=20, proxies=_WX_PROXIES)
     r.raise_for_status()
     d = r.json()
     if d.get("errcode"):
@@ -221,9 +232,9 @@ def _wx_call(method, path, token, json_body=None, files=None, timeout=60, retrie
     for i in range(1, retries + 1):
         try:
             if files is not None:
-                r = requests.post(url, files=files, timeout=timeout)
+                r = requests.post(url, files=files, timeout=timeout, proxies=_WX_PROXIES)
             else:
-                r = requests.request(method, url, json=json_body, timeout=timeout)
+                r = requests.request(method, url, json=json_body, timeout=timeout, proxies=_WX_PROXIES)
             try:
                 d = r.json()
             except Exception:
