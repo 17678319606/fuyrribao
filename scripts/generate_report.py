@@ -1004,6 +1004,63 @@ def _emit_changed(changed):
         pass
 
 
+def _ensure_daily_summary(report, base_urls, api_key, model, today):
+    """末波保证 daily_summary 完整：主生成若被截断/遗漏（daily_summary 在 JSON 尾部最易被掐），
+    单独补一次聚焦生成，确保『完整日报』含『每日总结·可复用方法论』。非末波不要求，直接跳过。"""
+    if not isinstance(report, dict):
+        return
+    ds = report.get("daily_summary")
+    if not isinstance(ds, dict):
+        ds = {}; report["daily_summary"] = ds
+    if (ds.get("methodology") or "").strip():
+        return  # 已有实质总结，无需补
+    items = []
+    for m in C.MODULES:
+        for it in (report.get("modules", {}) or {}).get(m, []):
+            items.append(it)
+    if not items:
+        return
+    if not api_key:
+        LOG.warning("无 AI key，无法补生成 daily_summary，保留空总结。")
+        return
+    ctx = json.dumps(
+        [{"title": it.get("title", ""), "summary": (it.get("summary") or "")[:200],
+          "source_url": it.get("source_url", "")} for it in items],
+        ensure_ascii=False, indent=2)
+    sys_p = ("你是副业日报的内容编辑。基于已收录条目，产出当天可复用方法论总结，"
+             "严格围绕副业赚钱/省钱/做项目创业/增长运营，不写新闻时事。只输出 JSON。")
+    user_p = (
+        f"今天是 {today}（北京时间）。以下是今日副业日报已收录的 {len(items)} 条内容"
+        f"（三模块：项目机会库/增长运营/观点心法）：\n{ctx}\n"
+        f"请提炼一段 200-400 字『每日总结·可复用方法论』：总结今天在副业赚钱、省钱、做项目创业、"
+        f"增长运营上的共性规律与可复用方法论；并从上述条目里挑选 3-5 条最具代表性的 source_url 作为 evidence。"
+        f"\n只输出 JSON：{{\"daily_summary\":{{\"methodology\":\"（200-400字）\",\"evidence\":[\"url1\",\"url2\"]}}}}"
+    )
+    for gen in range(1, GEN_RETRIES + 1):
+        try:
+            content = _call_ai(base_urls, api_key, model, sys_p, user_p, stream=True)
+        except Exception as e:
+            LOG.error("daily_summary 补生成调用失败（%d/%d）：%s", gen, GEN_RETRIES, e)
+            if gen < GEN_RETRIES:
+                time.sleep(BACKOFF_BASE); continue
+            return
+        sub = _extract_json(content)
+        sub_ds = (sub.get("daily_summary") if isinstance(sub, dict) else None) or {}
+        meth = (sub_ds.get("methodology") or "").strip()
+        if not meth:
+            if gen < GEN_RETRIES:
+                time.sleep(BACKOFF_BASE); continue
+            return
+        ev = sub_ds.get("evidence") or []
+        if not isinstance(ev, list):
+            ev = []
+        ev = [u for u in ev if isinstance(u, str) and u.startswith("http")][:5]
+        report["daily_summary"] = {"methodology": meth, "evidence": ev}
+        LOG.info("daily_summary 已补生成（%d字，%d条证据）", len(meth), len(ev))
+        return
+    LOG.warning("daily_summary 补生成多次失败，保留空总结（不影响其余条目发布）。")
+
+
 def main():
     overall_t0 = time.time()
     C.ensure_dirs()
@@ -1290,6 +1347,10 @@ def main():
         merged["date"] = today
         merged["timezone"] = "Asia/Shanghai"
         report = merged
+
+        # 末波补全 daily_summary（主生成常被截断在尾部，导致『每日总结』丢失 → 补全以保证完整日报）
+        if is_final:
+            _ensure_daily_summary(report, base_urls, api_key, model, today)
 
     # 写回累积状态 & 当日报告
     C.save_json(daily_state_path, report)
