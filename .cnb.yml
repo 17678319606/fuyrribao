@@ -1,4 +1,4 @@
-# 副业日报 CNB 流水线（crontab 定时 + 手动触发）
+# 副业日报 CNB 流水线（crontab 定时 + 手动/API 触发）
 # ─────────────────────────────────────────────────────────────────────
 # 时区：Asia/Shanghai（北京时间）。对应原 GitHub Actions 的 UTC 22:01 / 11:40 / 12:10
 #       即 北京 06:01（晨间首版）/ 19:40（晚间补发1）/ 20:10（晚间补发2）。
@@ -6,6 +6,10 @@
 #       GEMINI_API_KEY / AI_SIDEHUSTLE_API_KEY 等需用户填入，与 GitHub Secrets 同值）。
 # 增量累积：state/ 通过 git 回写持久化，保证同日多时段触发是「增量刷新」而非「全量重建」。
 # 注意：不监听 push 事件，避免心跳回写再次触发流水线形成死循环。
+# 触发方式：
+#   - crontab ×3 ：系统定时（需 push 后调用 crontab/sync 注册）
+#   - web_trigger ：CNB 网页「运行」按钮手动触发
+#   - api_trigger ：通过 Open API build/start（event=api_trigger）触发
 
 .cnb-job: &cnb-job
   - docker:
@@ -35,5 +39,7 @@ main:
   "crontab: 40 19 * * *": !reference [.cnb-job]
   # 晚间补发 2（北京 20:10）
   "crontab: 10 20 * * *": !reference [.cnb-job]
-  # 手动触发（CNB 页面「运行」或 API），用于验证 / 补发，不形成循环
+  # 网页「运行」按钮手动触发（验证 / 补发，不形成循环）
   web_trigger: !reference [.cnb-job]
+  # Open API build/start（event=api_trigger）触发，用于自动化验证
+  api_trigger: !reference [.cnb-job]
