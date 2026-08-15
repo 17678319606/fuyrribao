@@ -32,5 +32,6 @@
   { "id": "geekpark", "type": "rss", "url": "https://www.geekpark.net/rss", "name": "极客公园" },
   { "id": "woshipm", "type": "rss", "url": "https://www.woshipm.com/feed", "name": "人人都是产品经理" },
   { "id": "growthhackers", "type": "rss", "url": "https://growthhackers.com/feed", "name": "GrowthHackers" },
-  { "id": "devto", "type": "rss", "url": "https://dev.to/feed", "name": "Dev.to" }
+  { "id": "devto", "type": "rss", "url": "https://dev.to/feed", "name": "Dev.to" },
+  { "id": "lobsters", "type": "rss", "url": "https://lobste.rs/rss", "name": "Lobsters" }
 ]

@@ -1343,7 +1343,15 @@ def main():
 
     # 2) 载入当日已累积日报（state/ 已缓存，跨次运行保留）—— 同日多次触发【增量累积】
     daily_state_path = os.path.join(C.STATE_DIR, f"daily_report_{today}.json")
-    accumulated = C.load_json(daily_state_path, {})
+    clean_mode = os.environ.get("DOCGEN_CLEAN", "").strip() in ("1", "true", "True")
+    if clean_mode:
+        # 清洁模式：忽略历史累积，全新生成。用于覆盖重写旧文（如旧策略残留垃圾），
+        # 无需再手工删 state 缓存——即使缓存里已有当日累积日报，也强制从空起步，
+        # 杜绝「旧垃圾被原样 merge 回来」导致清洁失败。
+        accumulated = {}
+        LOG.info("清洁模式(DOCGEN_CLEAN)开启：忽略历史累积，全新生成（用于覆盖重写旧文）")
+    else:
+        accumulated = C.load_json(daily_state_path, {})
     acc_modules = accumulated.get("modules", {}) if isinstance(accumulated, dict) else {}
     existing_keys = set()
     for mod in C.MODULES:

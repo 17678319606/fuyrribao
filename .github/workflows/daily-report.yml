@@ -25,6 +25,10 @@ on:
         description: '目标日期(YYYY-MM-DD)，用于重生成/清洁历史文章；留空=今天'
         required: false
         default: ''
+      clean:
+        description: '清洁模式：忽略历史累积、全新生成（覆盖重写旧文，无需手工删缓存）'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write               # 仅用于提交心跳 / 去重状态 / 产物回仓库
@@ -36,6 +40,7 @@ concurrency:
 env:
   TZ: Asia/Shanghai
   DOCGEN_TARGET_DATE: ${{ github.event.inputs.target_date }}
+  DOCGEN_CLEAN: ${{ github.event.inputs.clean }}
   # —— WordPress ——（地址/账号/分类已在代码默认，这里只放应用密码）
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   # —— AI 后端：璇玑网关地址(api.jinbufenzi.com/v1)与模型(qwen3.6-35b-a3b)已在代码默认，
