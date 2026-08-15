@@ -15,13 +15,18 @@ define('FUYR_WXP_VERSION', '1.0.0');
 /* ───────────────────────── 默认设置 ───────────────────────── */
 function fuyr_wxp_defaults() {
     return array(
-        'appid'       => '',
-        'secret'      => '',
-        'mode'        => 'draft', // freepublish(微信已废弃45106) | draft | mass
-        'author'      => '副业日报',
-        'final_hour'  => 19,
-        'category'    => '日报',
-        'cover_id'    => 0,
+        'appid'          => '',
+        'secret'         => '',
+        'mode'           => 'draft', // freepublish(微信已废弃45106) | draft | mass
+        'author'         => '副业日报',
+        // 触发方式：'all' = 文章发布/更新(含修订)即同步；'new' = 仅"新发布"那一次(状态由非发布转为发布)才同步。
+        // 注意：日报是「同一个文章每天原地更新」，不会再次"新发布"，故日报场景应选 'all'。
+        'sync_mode'      => 'all',
+        // 触发分类：支持逗号分隔的「多个分类名 / 分类ID」(如 "日报" 或 "日报,3,资讯")；留空不触发。
+        'category'       => '日报',
+        'cover_id'       => 0,
+        // 企业微信机器人 Webhook（通知用）。留空则不发通知。
+        'wxwork_webhook' => '',
     );
 }
 
@@ -277,19 +282,10 @@ function fuyr_wxp_push($post_id, $force = false) {
         return $r;
     }
 
-    // 时间门槛 + 当日去重（手动强制时跳过）
+    // 内容感知去重（手动强制时跳过）：仅当「今天已推过 且 文章自上次推送后未再更新」才跳过，
+    // 避免同一内容被重复保存时双发；内容一旦变化（如日报 19:00 刷新为最全版）即重新推送。
+    // 时间门槛已移除：文章发布/更新即同步，无需"等到末次触发"，保证一定能同步、不用盯着时间等。
     if (!$force) {
-        $hour = fuyr_wxp_bj_hour();
-        if ($hour < intval($o['final_hour'])) {
-            $r = new WP_Error('too_early', '当前北京小时 ' . $hour . ' < ' . intval($o['final_hour']) . '，等待末次发布后再推');
-            return $r; // 正常跳过，不记录为失败
-        }
-        // 去重改为「内容感知」：仅当「今天已推过 且 文章自上次推送后未再更新」才跳过。
-        // 这样：
-        //   ① 6 点那波更新（hour<final_hour）本来就 too_early 不推；
-        //   ② 19 点末次更新（内容变化 → post_modified 改变）会重新推送最新合并版，
-        //      不会被早先的「手动推送 / 早一波」永久阻塞（修掉"点了立即生成后定时不推"的体感）；
-        //   ③ 同一内容被重复保存（定时 + 宝塔兜底内容一致）才会判定 dup 跳过，避免双发。
         $pushed_date     = get_option('fuyr_wxp_pushed_date', '');
         $pushed_modified = get_option('fuyr_wxp_pushed_modified', '');
         $cur_modified    = $post->post_modified_gmt ?: $post->post_modified;
@@ -363,6 +359,31 @@ function fuyr_wxp_push($post_id, $force = false) {
     return $msg;
 }
 
+/* ───────────────────────── 企业微信机器人通知 ───────────────────────── */
+function fuyr_wxp_notify_wecom($ok, $msg) {
+    $o = fuyr_wxp_opts();
+    $hook = trim($o['wxwork_webhook'] ?? '');
+    if (empty($hook)) {
+        return; // 未配置 webhook，不发通知
+    }
+    $content = "## 副业日报 · 公众号推送通知\n"
+              . "> 时间：**" . fuyr_wxp_bj_date() . "** " . fuyr_wxp_bj_hour() . "时  \n"
+              . "> 结果：**" . ($ok ? '成功' : '失败') . "**  \n"
+              . "> " . $msg;
+    $body = json_encode(array(
+        'msgtype'  => 'markdown',
+        'markdown' => array('content' => $content),
+    ), JSON_UNESCAPED_UNICODE);
+    $res = wp_remote_post($hook, array(
+        'timeout' => 15,
+        'headers' => array('Content-Type' => 'application/json'),
+        'body'    => $body,
+    ));
+    if (is_wp_error($res)) {
+        error_log('[fuyr-wechat-pusher] 企业微信通知发送失败: ' . $res->get_error_message());
+    }
+}
+
 function fuyr_wxp_record_result($res, $ok = false) {
     if (is_wp_error($res)) {
         $txt = '[失败 ' . $res->get_error_code() . '] ' . $res->get_error_message();
@@ -370,47 +391,95 @@ function fuyr_wxp_record_result($res, $ok = false) {
         $txt = '[成功] ' . $res;
     }
     update_option('fuyr_wxp_last_result', fuyr_wxp_bj_date() . ' ' . fuyr_wxp_bj_hour() . '时 ' . $txt);
+    // 企业微信机器人通知（推送成功/失败都提醒，配置 webhook 才发）
+    fuyr_wxp_notify_wecom($ok, $txt);
 }
 
-/* ───────────────────────── 分类匹配（支持名称或 ID） ───────────────────── */
-function fuyr_wxp_match_category($post_id, $category) {
+/* ───────────────────────── 分类匹配（支持多分类：名称或 ID 混合，逗号分隔） ───────────────────── */
+function fuyr_wxp_match_categories($post_id, $category) {
     if (empty($category)) {
         return false;
     }
-    // 纯数字 → 按分类 ID 匹配
-    if (is_numeric($category)) {
-        $cats = wp_get_post_categories($post_id, array('fields' => 'ids'));
-        return in_array(intval($category), $cats, true);
+    // 支持逗号分隔的多个分类（名称或 ID 混合），命中任一即推送。
+    $parts = array_filter(array_map('trim', preg_split('/[,，]/u', $category)), function ($s) {
+        return $s !== '';
+    });
+    if (empty($parts)) {
+        return false;
     }
-    // 非数字 → 按分类名匹配（原有逻辑）
-    $cats = wp_get_post_categories($post_id, array('fields' => 'names'));
-    return in_array($category, $cats, true);
+    $id_cats   = wp_get_post_categories($post_id, array('fields' => 'ids'));
+    $name_cats = wp_get_post_categories($post_id, array('fields' => 'names'));
+    foreach ($parts as $p) {
+        if (is_numeric($p)) {
+            if (in_array(intval($p), $id_cats, true)) {
+                return true;
+            }
+        } else {
+            if (in_array($p, $name_cats, true)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
-/* ───────────────────────── 发布钩子（自动推送） ───────────────────────── */
-add_action('save_post', 'fuyr_wxp_on_save', 20, 2);
-function fuyr_wxp_on_save($post_id, $post) {
+/* ───────────────────────── 发布钩子（自动推送） ─────────────────────────
+ * 两种触发模式（设置页 sync_mode 切换）：
+ *   - 'all'（默认）：挂在 save_post，文章「发布或任何更新(含修订)」都同步，立即推送、无需等待时间。
+ *   - 'new'：挂在 transition_post_status，仅当文章「由非发布状态转为发布」那一次才同步
+ *            （适合"每篇都是独立新文章"的站点；日报是同一篇原地更新，应选 'all'）。
+ * 仅注册其中一个钩子，避免重复触发导致双推。
+ */
+function fuyr_wxp_can_push($post) {
     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
-        return;
+        return false;
     }
-    if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
-        return;
+    if (wp_is_post_revision($post->ID) || wp_is_post_autosave($post->ID)) {
+        return false;
     }
     if ($post->post_type !== 'post' || $post->post_status !== 'publish') {
-        return;
+        return false;
     }
+    return true;
+}
+
+function fuyr_wxp_try_push($post_id) {
     $o = fuyr_wxp_opts();
     if (empty($o['category'])) {
         return;
     }
-    if (!fuyr_wxp_match_category($post_id, $o['category'])) {
+    if (!fuyr_wxp_match_categories($post_id, $o['category'])) {
         return;
     }
-    // 同步执行（流水线侧已有超时余量）；失败仅记录，不阻断 WP 发布
+    // 同步执行（流水线侧已有超时余量）；失败仅记录 + 企业微信告警，不阻断 WP 发布
     $res = fuyr_wxp_push($post_id, false);
     if (is_wp_error($res) && !in_array($res->get_error_code(), array('too_early', 'dup'), true)) {
         error_log('[fuyr-wechat-pusher] 推送失败: ' . $res->get_error_message());
     }
+}
+
+function fuyr_wxp_on_save($post_id, $post) {
+    if (!fuyr_wxp_can_push($post)) {
+        return;
+    }
+    fuyr_wxp_try_push($post_id);
+}
+
+function fuyr_wxp_on_transition($new_status, $old_status, $post) {
+    if ($new_status !== 'publish' || $old_status === 'publish') {
+        return;
+    }
+    if (!fuyr_wxp_can_push($post)) {
+        return;
+    }
+    fuyr_wxp_try_push($post->ID);
+}
+
+$o = fuyr_wxp_opts();
+if (($o['sync_mode'] ?? 'all') === 'new') {
+    add_action('transition_post_status', 'fuyr_wxp_on_transition', 20, 3);
+} else {
+    add_action('save_post', 'fuyr_wxp_on_save', 20, 2);
 }
 
 /* ───────────────────────── 提示与上次结果 ───────────────────────── */
@@ -440,10 +509,14 @@ function fuyr_wxp_handle_push_now() {
     }
     check_admin_referer('fuyr_wxp_push_now');
     $o = fuyr_wxp_opts();
-    // 查询参数：ID 用 cat 参数，名称用 category_name
-    $cat_query = is_numeric($o['category'])
-        ? array('cat' => intval($o['category']))
-        : array('category_name' => $o['category']);
+    // 多分类：取第一个作为手动测试的查询条件（ID 用 cat 参数，名称用 category_name）
+    $cat_parts = array_filter(array_map('trim', preg_split('/[,，]/u', $o['category'])), function ($s) {
+        return $s !== '';
+    });
+    $first_cat = $cat_parts[0] ?? '';
+    $cat_query = is_numeric($first_cat)
+        ? array('cat' => intval($first_cat))
+        : array('category_name' => $first_cat);
     $posts = get_posts(array_merge(array(
         'post_type'      => 'post',
         'post_status'    => 'publish',
@@ -479,11 +552,12 @@ function fuyr_wxp_sanitize($input) {
     $out['secret']     = sanitize_text_field($input['secret'] ?? '');
     $out['mode']       = in_array($input['mode'] ?? '', array('freepublish', 'draft', 'mass'), true) ? $input['mode'] : 'draft';
     $out['author']     = sanitize_text_field($input['author'] ?? $d['author']);
-    $out['final_hour'] = intval($input['final_hour'] ?? $d['final_hour']);
-    if ($out['final_hour'] < 0 || $out['final_hour'] > 23) {
-        $out['final_hour'] = 19;
-    }
+    // 触发方式：仅允许 'new' / 'all'
+    $out['sync_mode']  = in_array($input['sync_mode'] ?? '', array('new', 'all'), true) ? $input['sync_mode'] : 'all';
+    // 触发分类：原样保存（逗号分隔多个），仅做基础清洗
     $out['category']   = sanitize_text_field($input['category'] ?? $d['category']);
+    // 企业微信 webhook：保留 URL 字符
+    $out['wxwork_webhook'] = esc_url_raw(trim($input['wxwork_webhook'] ?? ''));
     $out['cover_id']   = intval($input['cover_id'] ?? 0);
     // 封面变更 → 失效旧 thumb_media_id，下次推送重新上传
     if ($out['cover_id'] != intval(get_option('fuyr_wxp_thumb_for'))) {
@@ -502,7 +576,7 @@ function fuyr_wxp_settings_page() {
     ?>
     <div class="wrap">
         <h1>副业日报 · 公众号推送设置</h1>
-        <p>在 WordPress 源站直接调用微信 API 推送，无需外部代理。当「<strong><?php echo esc_html($o['category']); ?></strong>」分类的文章发布/更新，且北京小时 ≥ <strong><?php echo intval($o['final_hour']); ?></strong> 时，自动推送当日最全版（同日仅推一次）。</p>
+        <p>在 WordPress 源站直接调用微信 API 推送，无需外部代理。当「<strong><?php echo esc_html($o['category']); ?></strong>」分类的文章<strong>发布或更新</strong>时，<strong>立即</strong>自动同步到公众号（已移除时间门槛，无需等待）。可配置<strong>多分类</strong>、选择「仅新发布」或「修订也触发」，并在企业微信群里接收推送<strong>成功/失败通知</strong>。</p>
 
         <form method="post" action="options.php">
             <?php settings_fields('fuyr_wxp_group'); ?>
@@ -530,14 +604,27 @@ function fuyr_wxp_settings_page() {
                     <td><input type="text" name="fuyr_wxp_settings[author]" value="<?php echo esc_attr($o['author']); ?>" class="regular-text"></td>
                 </tr>
                 <tr>
-                    <th>末次触发小时(北京)</th>
-                    <td><input type="number" min="0" max="23" name="fuyr_wxp_settings[final_hour]" value="<?php echo intval($o['final_hour']); ?>" class="small-text"> 时</td>
+                    <th>触发方式</th>
+                    <td>
+                        <select name="fuyr_wxp_settings[sync_mode]">
+                            <option value="all" <?php selected($o['sync_mode'], 'all'); ?>>发布/更新都同步（推荐，日报用这个）</option>
+                            <option value="new" <?php selected($o['sync_mode'], 'new'); ?>>仅「新发布」那一次</option>
+                        </select>
+                        <p class="description">「发布/更新都同步」：文章每次保存（含修订）都推，立即生效、无需等时间，最适合「同日原地更新」的日报；「仅新发布」：只在文章由草稿/私密等转为发布时推一次，适合每篇都是独立新文章的站点。</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>企业微信机器人</th>
+                    <td>
+                        <input type="url" name="fuyr_wxp_settings[wxwork_webhook]" value="<?php echo esc_attr($o['wxwork_webhook']); ?>" class="regular-text" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+                        <p class="description">填企业微信群机器人 Webhook 地址。推送<strong>成功或失败都会在群里提醒</strong>。留空则只在本页显示结果、不发群通知（不影响推送本身）。</p>
+                    </td>
                 </tr>
                 <tr>
                     <th>触发分类</th>
                     <td>
-                        <input type="text" name="fuyr_wxp_settings[category]" value="<?php echo esc_attr($o['category']); ?>" class="regular-text" placeholder="填分类名（如「日报」）或分类ID（数字，更稳妥）">
-                        <p class="description">文章须属于该分类才推送。推荐填<strong>分类 ID</strong>（数字），即使重命名分类也不会失效。留空则不触发自动推送。</p>
+                        <input type="text" name="fuyr_wxp_settings[category]" value="<?php echo esc_attr($o['category']); ?>" class="regular-text" placeholder="填分类名或ID，多个用逗号分隔，如：日报 或 日报,3,资讯">
+                        <p class="description">文章须属于其中<strong>任一</strong>分类才推送。支持「分类名 / 分类ID」混合、逗号分隔（中英文逗号均可）。推荐填<strong>分类 ID</strong>（数字），即使重命名也不会失效。留空则不触发自动推送。</p>
                         <?php
                         // 展示现有分类列表帮助用户确认 ID
                         $all_cats = get_categories(array('hide_empty' => false, 'orderby' => 'name'));

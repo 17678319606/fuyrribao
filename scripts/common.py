@@ -17,7 +17,15 @@ SEEN_FILE = os.path.join(STATE_DIR, "seen.json")
 RETENTION_DAYS = 60          # 数据文件 / 去重表的保留天数（到期自动清理）
 COLD_START_MAX_PER_SOURCE = 15  # 冷启动（首次运行）每个源最多取多少条，避免首期爆量
 MAX_PER_SOURCE = 300         # 每个源每次最多保留多少条（RSS 受 Feed 本身条数限制；HTML/Reddit/Diff 类可拉更多；用户要求放宽到 300 以容纳高产源）
-MAX_CANDIDATES = 1500        # 单日候选上限（data/ 已 gitignore，不进 git 历史，仓库容量零影响；随每源上限放宽到 300 同步提高到 1500，避免总量被卡死）
+MAX_CANDIDATES = 1500        # 单日候选硬上限（兜底安全网，正常均衡后远不会触及）
+
+# —— 多样性均衡（P1-A 修复）——
+# 候选超过 BALANCE_TRIGGER 即触发「按源均衡采样」，使单源占比可控、
+# 不再出现单源垄断（如中年指南一度占 ~47%）；同时不浪费 AI 额度。
+BALANCE_TRIGGER = 300         # 触发均衡的总候选阈值（正常量级 ~643 >> 300，必触发）
+BALANCE_TARGET = 900          # 均衡目标总量；普通源单源上限 = ceil(目标 / 组数)
+HIGH_SOURCE_CAP = 70          # 高配额源（增量源，如中年指南，sources.json 中 quota=="high"）
+                              # 的更高但仍有上限的配额，避免过度砍掉其新内容
 
 # 渲染器版本：每次修改 publish_wp.py 的排版/结构时 +1。
 # 发布到 WP 的文章顶部会写入 <!-- dr-renderer:N --> 标记；

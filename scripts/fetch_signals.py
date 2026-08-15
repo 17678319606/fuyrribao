@@ -126,9 +126,11 @@ def parse_rss(cfg):
     try:
         resp = _http_get(url)
         raw = resp.text
-    except Exception as e:
-        LOG.warning("RSS 抓取失败 %s: %s", name, e)
-        return []
+    except Exception:
+        # P1-C 修复：抓取失败必须让 main() 外层 except 知道（标 ok=False），
+        # 不能吞掉返回空（否则失败源被误判为「成功、0 条」）。
+        LOG.warning("RSS 抓取失败 %s", name)
+        raise
     d = feedparser.parse(raw)
     out = []
     for e in d.entries[: C.MAX_PER_SOURCE]:
@@ -194,9 +196,10 @@ def parse_github_readme_diff(cfg):
     snap_path = os.path.join(C.REPO_ROOT, cfg["snapshot"])
     try:
         cur = _http_get(url).text
-    except Exception as e:
-        LOG.warning("github_readme_diff 抓取失败 %s: %s", name, e)
-        return []
+    except Exception:
+        # P1-C 修复：抓取失败必须上抛，使 main() 标 ok=False（冷启动无新内容仍是合法空，见下方 return []）。
+        LOG.warning("github_readme_diff 抓取失败 %s", name)
+        raise
     # 抽取当前 README 中的 http 链接集合（去重、保序）
     cur_links = []
     seen_link = set()
@@ -257,9 +260,10 @@ def parse_github_trending(cfg):
     from bs4 import BeautifulSoup
     try:
         r = _http_get(url)
-    except Exception as e:
-        LOG.warning("github_trending 抓取失败 %s: %s", name, e)
-        return []
+    except Exception:
+        # P1-C 修复：抓取失败必须上抛，使 main() 标 ok=False（合法空源仍由主流程记 ok=True, got=0）。
+        LOG.warning("github_trending 抓取失败 %s", name)
+        raise
     soup = BeautifulSoup(r.text, "lxml")
     out = []
     for art in soup.select("article.Box-row"):
@@ -350,6 +354,7 @@ def main():
     C.ensure_dirs()
     sources = C.load_json(C.SOURCES_FILE, [])
     seen = C.load_seen()
+    quota_map = {s.get("name"): s.get("quota", "normal") for s in sources}  # P1-A：高配额源识别
     cold = len(seen) == 0
     today = C.date_str()
     LOG.info("开始采集，源数量=%d，冷启动=%s，今日=%s", len(sources), cold, today)
@@ -374,14 +379,16 @@ def main():
         # 这样「移到回收站后重跑 / 同日多次执行」都能重新产出候选，再由 publish 覆盖更新。
         fresh = []
         for it in items:
-            sid = it.get("id")
-            if not sid:
+            iid = it.get("id")
+            if not iid:
                 continue
-            last = seen.get(sid)
+            last = seen.get(iid)
             if last and last[:10] < today:   # 仅既往日屏蔽；同日放行，支持重跑刷新
                 continue
             fresh.append(it)
         LOG.info("源 %s: 抓到 %d，新增 %d", cfg.get("id"), len(items), len(fresh))
+        # 注意：此处 src_status[sid] 用的是外层源 id（第 360 行），
+        # 内层循环变量已改名为 iid，避免源 id 被条目 id 遮蔽（P1-B 修复）。
         src_status[sid] = {"ok": True, "reason": "", "got": len(items), "fresh": len(fresh)}
         # 每个源限流，保证多样性并控制 AI 上下文长度
         fresh = fresh[: C.MAX_PER_SOURCE]
@@ -391,25 +398,46 @@ def main():
         candidates.sort(key=lambda x: x.get("published_at", ""), reverse=True)
         candidates = candidates[: C.MAX_CANDIDATES]
 
-    # 非冷启动也做总量护栏：防止某天多个源同时高产导致候选爆量、AI 分批调用过多。
-    # 均衡按源采样到 MAX_CANDIDATES，保证每个源都有代表、又不浪费 AI 额度。
-    if len(candidates) > C.MAX_CANDIDATES:
+    # 非冷启动也做总量护栏 + 多样性均衡（P1-A 修复）：
+    # 候选超过 BALANCE_TRIGGER 即触发「按源均衡采样」，使单源占比可控、不再出现单源垄断
+    # （如中年指南一度占 ~47%）；普通源单源上限 = ceil(BALANCE_TARGET / 组数)，
+    # 高配额源（quota=="high"，如中年指南）给 HIGH_SOURCE_CAP，既防垄断又不过度砍增量源新内容；
+    # 同时不浪费 AI 额度（候选总量收敛到 BALANCE_TARGET 附近）。
+    if len(candidates) > C.BALANCE_TRIGGER:
         from collections import OrderedDict
         orig = len(candidates)
         groups = OrderedDict()
         for s in candidates:
             groups.setdefault(s.get("source_name", "未知"), []).append(s)
-        per = max(1, -(-C.MAX_CANDIDATES // len(groups)))
-        picked, leftover = [], []
+        n = len(groups)
+        per = max(1, -(-C.BALANCE_TARGET // n))   # 普通源单源上限
+        # 第一遍：按 cap 截断（高配额源用 HIGH_SOURCE_CAP），得到每源初选。
+        capped = {}
         for nm, items in groups.items():
-            if len(items) > per:
-                picked.extend(items[:per]); leftover.extend(items[per:])
-            else:
-                picked.extend(items)
-        if len(picked) < C.MAX_CANDIDATES and leftover:
-            picked.extend(leftover[: C.MAX_CANDIDATES - len(picked)])
-        candidates = picked[: C.MAX_CANDIDATES]
-        LOG.info("候选 %d 条超限，均衡采样至 %d 条（保多样性 + 控额度）", orig, len(candidates))
+            cap = C.HIGH_SOURCE_CAP if quota_map.get(nm) == "high" else per
+            capped[nm] = list(items[:cap])
+        picked = [it for v in capped.values() for it in v]
+        # 第二遍：总量未达 BALANCE_TARGET 且仍有空间时，仅向「未满」源按 cap 补位；
+        # 绝不突破任何源的 cap（修复竞析实现缺陷：原 leftover 回填会把高配额源被砍的
+        # 剩余又全部填回，导致垄断回潮、限流形同虚设）。
+        room_total = C.BALANCE_TARGET - len(picked)
+        if room_total > 0:
+            for nm, items in groups.items():
+                if room_total <= 0:
+                    break
+                cap = C.HIGH_SOURCE_CAP if quota_map.get(nm) == "high" else per
+                have = len(capped[nm])
+                if have >= cap:
+                    continue
+                extra = items[have:cap]
+                take = min(len(extra), room_total)
+                if take:
+                    capped[nm].extend(extra[:take])
+                    room_total -= take
+        candidates = [it for v in capped.values() for it in v]
+        candidates = candidates[: C.BALANCE_TARGET]
+        LOG.info("候选 %d 条触发均衡（阈值 %d），按源采样至 %d 条（保多样性 + 控额度）",
+                 orig, C.BALANCE_TRIGGER, len(candidates))
 
     # 写入今日候选
     cand_path = os.path.join(C.DATA_DIR, f"candidates-{today}.json")
