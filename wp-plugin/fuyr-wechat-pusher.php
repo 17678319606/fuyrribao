@@ -246,10 +246,19 @@ function fuyr_wxp_render_content($post) {
     $content = preg_replace('/<style[^>]*>.*?<\/style>/is', '', $content);
     // 移除 HTML 注释（render 时插入的渲染器标记等，微信端无意义）
     $content = preg_replace('/<!--.*?-->/s', '', $content);
+    // 移除渲染器版本标记残留（如 dr-renderer:1.0 可能被 wpautop 拆散）
+    $content = preg_replace('/dr-renderer[:\d.]*/', '', $content);
+    // 去除多余连续空白行（微信对多余空白行敏感，会导致大段空白）
+    $content = preg_replace('/\n{3,}/', "\n\n", $content);
+    // 图片强制 max-width 100%（防止宽图撑破微信容器；WP 内联样式可能带固定宽度）
+    $content = preg_replace('/(<img[^>]*?style=[\'"])([^\'"]*)([\'"])/i',
+        '$1$2;max-width:100%!important;height:auto!important;$3', $content);
+    // 去除 footer 类无关信息（如"本文由 GitHub Actions 自动生成"，公众号不需要）
+    $content = preg_replace('/<footer[^>]*>.*?<\/footer>/is', '', $content);
     $wrap = 'max-width:677px;width:100%;margin:0 auto;padding:16px;'
           . "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;"
           . 'line-height:1.8;color:#2b2b2b;';
-    return '<div style="' . $wrap . '">' . $content . '</div>';
+    return '<div style="' . $wrap . '">' . trim($content) . '</div>';
 }
 
 /* ───────────────────────── 核心：推送单篇文章 ───────────────────────── */
@@ -346,6 +355,21 @@ function fuyr_wxp_record_result($res, $ok = false) {
     update_option('fuyr_wxp_last_result', fuyr_wxp_bj_date() . ' ' . fuyr_wxp_bj_hour() . '时 ' . $txt);
 }
 
+/* ───────────────────────── 分类匹配（支持名称或 ID） ───────────────────── */
+function fuyr_wxp_match_category($post_id, $category) {
+    if (empty($category)) {
+        return false;
+    }
+    // 纯数字 → 按分类 ID 匹配
+    if (is_numeric($category)) {
+        $cats = wp_get_post_categories($post_id, array('fields' => 'ids'));
+        return in_array(intval($category), $cats, true);
+    }
+    // 非数字 → 按分类名匹配（原有逻辑）
+    $cats = wp_get_post_categories($post_id, array('fields' => 'names'));
+    return in_array($category, $cats, true);
+}
+
 /* ───────────────────────── 发布钩子（自动推送） ───────────────────────── */
 add_action('save_post', 'fuyr_wxp_on_save', 20, 2);
 function fuyr_wxp_on_save($post_id, $post) {
@@ -362,8 +386,7 @@ function fuyr_wxp_on_save($post_id, $post) {
     if (empty($o['category'])) {
         return;
     }
-    $cats = wp_get_post_categories($post_id, array('fields' => 'names'));
-    if (!in_array($o['category'], $cats, true)) {
+    if (!fuyr_wxp_match_category($post_id, $o['category'])) {
         return;
     }
     // 同步执行（流水线侧已有超时余量）；失败仅记录，不阻断 WP 发布
@@ -400,14 +423,17 @@ function fuyr_wxp_handle_push_now() {
     }
     check_admin_referer('fuyr_wxp_push_now');
     $o = fuyr_wxp_opts();
-    $posts = get_posts(array(
+    // 查询参数：ID 用 cat 参数，名称用 category_name
+    $cat_query = is_numeric($o['category'])
+        ? array('cat' => intval($o['category']))
+        : array('category_name' => $o['category']);
+    $posts = get_posts(array_merge(array(
         'post_type'      => 'post',
         'post_status'    => 'publish',
-        'category_name'  => $o['category'],
         'posts_per_page' => 1,
         'orderby'        => 'date',
         'order'          => 'DESC',
-    ));
+    ), $cat_query));
     if (empty($posts)) {
         fuyr_wxp_notice('error', '未找到「' . $o['category'] . '」分类的已发布文章');
     } else {
@@ -492,7 +518,22 @@ function fuyr_wxp_settings_page() {
                 </tr>
                 <tr>
                     <th>触发分类</th>
-                    <td><input type="text" name="fuyr_wxp_settings[category]" value="<?php echo esc_attr($o['category']); ?>" class="regular-text"> 文章须属于该分类才推送</td>
+                    <td>
+                        <input type="text" name="fuyr_wxp_settings[category]" value="<?php echo esc_attr($o['category']); ?>" class="regular-text" placeholder="填分类名（如「日报」）或分类ID（数字，更稳妥）">
+                        <p class="description">文章须属于该分类才推送。推荐填<strong>分类 ID</strong>（数字），即使重命名分类也不会失效。留空则不触发自动推送。</p>
+                        <?php
+                        // 展示现有分类列表帮助用户确认 ID
+                        $all_cats = get_categories(array('hide_empty' => false, 'orderby' => 'name'));
+                        if (!empty($all_cats)) {
+                            echo '<p class="description" style="margin-top:4px">现有分类：';
+                            foreach ($all_cats as $c) {
+                                $mark = ($o['category'] == $c->term_id || $o['category'] == $c->name) ? ' ✅' : '';
+                                echo '<code>' . $c->name . '</code>(<small>ID=' . $c->term_id . '</small>)' . esc_html($mark) . '  ';
+                            }
+                            echo '</p>';
+                        }
+                        ?>
+                    </td>
                 </tr>
                 <tr>
                     <th>封面图</th>

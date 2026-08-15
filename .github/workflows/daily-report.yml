@@ -204,9 +204,52 @@ jobs:
             sleep 5
           done
 
-      - name: 失败告警（企业微信机器人）
-        if: failure()
+      - name: 判断是否为末次触发（通知策略）
+        id: notify_check
         run: |
-          curl -s -o /dev/null -X POST "${{ secrets.WXWORK_WEBHOOK || '<WXWORK_WEBHOOK_PLACEHOLDER>' }}" \
+          # 通知策略：
+          #   - 手动触发(workflow_dispatch)：每次都通知（测试/开发需要）
+          #   - 定时触发(schedule)：
+          #       - 19:01（晚间）= 末次触发 → 成功/失败都通知
+          #       - 06:01（晨间）= 非末次 → 仅失败才通知（成功则静默）
+          BJ=$(TZ=Asia/Shanghai date +%H%M)
+          EVENT="${{ github.event_name }}"
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "notify=always" >> "$GITHUB_OUTPUT"
+            echo "is_final=true" >> "$GITHUB_OUTPUT"
+          elif [ "$BJ" -ge "1900" ] || [ "$BJ" -lt "0600" ]; then
+            echo "notify=always" >> "$GITHUB_OUTPUT"
+            echo "is_final=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notify=failure_only" >> "$GITHUB_OUTPUT"
+            echo "is_final=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "bj_time=$BJ event=$EVENT"
+
+      - name: 末次汇总通知（企业微信）
+        if: always() && steps.notify_check.outputs.notify == 'always'
+        run: |
+          RESULT="${{ job.status }}"
+          BJ_TIME="${{ steps.notify_check.outputs.bj_time }}"
+          IS_FINAL="${{ steps.notify_check.outputs.is_final }}"
+          URL="${{ secrets.WXWORK_WEBHOOK || '<WXWORK_WEBHOOK_PLACEHOLDER>' }}"
+          if [ "$URL" = "<WXWORK_WEBHOOK_PLACEHOLDER>" ]; then
+            echo "⚠️ 未配置 WXWORK_WEBHOOK，跳过通知"
+            exit 0
+          fi
+          if [ "$RESULT" = "success" ]; then
+            MSG="✅ **副业日报流水线成功**（${BJ_TIME} 北京时间）
+            > 日期：$(TZ=Asia/Shanghai date '+%Y-%m-%d')
+            > 触发类型：${{ github.event_name == 'workflow_dispatch' && '手动' || '定时' }}
+            > 是否末次：${IS_FINAL}
+            >
+            > 文章已发布到 WordPress，公众号由 WP 插件自动推送。
+            > [查看运行](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          else
+            MSG="❌ **副业日报流水线失败**（${BJ_TIME} 北京时间）
+            > 请尽快检查：[查看运行](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          fi
+          curl -s -o /dev/null -X POST "$URL" \
             -H "Content-Type: application/json" \
-            -d "{\"msgtype\":\"text\",\"text\":{\"content\":\"【副业日报】GitHub Actions 今日生成失败，请检查。\nrun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}}"
+            -d "$(python3 -c "import json;print(json.dumps({'msgtype':'markdown','markdown':{'content':'''$MSG'''}}))")"
+          echo "通知已发送（result=$RESULT, is_final=$IS_FINAL)"
