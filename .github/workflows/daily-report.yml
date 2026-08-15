@@ -31,16 +31,11 @@ concurrency:
 
 env:
   TZ: Asia/Shanghai
-  # —— WordPress ——
-  WP_URL: https://dajiayouxuan.com
-  WP_USER: tougao
+  # —— WordPress ——（地址/账号/分类已在代码默认，这里只放应用密码）
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-  WP_CATEGORY_NAME: 日报
-  # —— AI 后端：璇玑国内网关（主用，已验证可出文章）——
-  ai_base_url: https://ai.jinbufenzi.com/v1
+  # —— AI 后端：璇玑网关地址(api.jinbufenzi.com/v1)与模型(qwen3.6-35b-a3b)已在代码默认，
+  #   这里只放敏感密钥；Gemini 仅在璇玑不可用时作兜底。
   ai_api_key: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
-  ai_model: ${{ secrets.AI_MODEL || 'auto' }}
-  # 原 Gemini（降级兜底；璇玑不可用时自动接管）
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   # 公众号推送已移交 WordPress 插件（fuyr-wechat-pusher）在源站直连微信 API，
   # CI 不再注入任何 WX_* 密钥/代理；AppID/AppSecret 仅存于 WP 后台设置页。
@@ -93,9 +88,9 @@ jobs:
           force_update = os.environ.get("FORCE_UPDATE", "") == "1"
           post_content = ""
           try:
-              wp = os.environ["WP_URL"].rstrip("/")
+              wp = os.environ.get("WP_URL", "https://dajiayouxuan.com").rstrip("/")
               auth = {"Authorization": "Basic " + base64.b64encode(
-                  f'{os.environ["WP_USER"]}:{os.environ["WP_APP_PASSWORD"]}'.encode()).decode()}
+                  f'{os.environ.get("WP_USER", "tougao")}:{os.environ.get("WP_APP_PASSWORD", "")}'.encode()).decode()}
               r = requests.get(wp + "/wp-json/wp/v2/posts",
                                params={"search": "副业日报", "status": "publish", "per_page": 20},
                                headers=auth, timeout=30)

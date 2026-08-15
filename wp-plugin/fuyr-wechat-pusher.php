@@ -151,7 +151,7 @@ function fuyr_wxp_find_font($need_cjk = false) {
     return '';
 }
 
-function fuyr_wxp_make_cover($base_path) {
+function fuyr_wxp_make_cover($base_path, $is_default = false) {
     // 无 GD → 直接退化为底图（仍能推送，只是没有叠加时间）
     if (!extension_loaded('gd') || !function_exists('imagecreatefromstring')) {
         return $base_path;
@@ -181,7 +181,9 @@ function fuyr_wxp_make_cover($base_path) {
         imagettftext($img, $fs, 0, $x1, $y1, $shadow, $font, $date);
         imagettftext($img, $fs, 0, $x1, $y1, $white,  $font, $date);
 
-        $sub  = $cjk ? ('副业日报 · 每日更新 ' . $time) : ('Daily ' . $time);
+        // 默认底图已自带"副业日报"标题 → 副标题只叠时间；自定义底图才加品牌前缀
+        $sub  = $is_default ? ('每日更新 ' . $time)
+                            : ($cjk ? ('副业日报 · 每日更新 ' . $time) : ('Daily ' . $time));
         $fs2  = max(12, intval($fs * 0.5));
         $b2   = imagettfbbox($fs2, 0, $font, $sub);
         $tw2  = $b2[2] - $b2[0];
@@ -207,17 +209,25 @@ function fuyr_wxp_make_cover($base_path) {
 function fuyr_wxp_ensure_thumb($token) {
     $o = fuyr_wxp_opts();
     $cover_id  = intval($o['cover_id']);
-    $file_path = $cover_id ? get_attached_file($cover_id) : '';
-    if (empty($file_path) || !file_exists($file_path)) {
-        return new WP_Error('no_cover', '未设置封面底图，无法生成封面（请在设置页上传一张底图/地图）');
+    $is_default = false;
+    if ($cover_id) {
+        $file_path = get_attached_file($cover_id);
+    } else {
+        // 未选封面 → 自动使用插件内置默认底图（地图风格），无需手动上传
+        $default_cover = plugin_dir_path(__FILE__) . 'default-cover.png';
+        $file_path = file_exists($default_cover) ? $default_cover : '';
+        $is_default = true;
     }
-    // 按「底图ID + 当天日期」缓存：同日重复保存不重复上传；跨天自动换新日期封面
-    $cache_key = 'fuyr_wxp_thumb_' . $cover_id . '_' . fuyr_wxp_bj_date();
+    if (empty($file_path) || !file_exists($file_path)) {
+        return new WP_Error('no_cover', '未设置封面底图，且插件内置默认封面缺失，请在设置页上传一张底图/地图');
+    }
+    // 按「底图标识 + 当天日期」缓存：同日重复保存不重复上传；跨天自动换新日期封面
+    $cache_key = 'fuyr_wxp_thumb_' . ($cover_id ?: 'default') . '_' . fuyr_wxp_bj_date();
     $cached = get_transient($cache_key);
     if ($cached) { return $cached; }
 
     // GD 合成带时间的封面（临时文件，不入库）
-    $cover  = fuyr_wxp_make_cover($file_path);
+    $cover  = fuyr_wxp_make_cover($file_path, $is_default);
     if (is_wp_error($cover)) { return $cover; }
     $is_tmp = ($cover !== $file_path);
     $mime   = $is_tmp ? 'image/png' : (get_post_mime_type($cover_id) ?: 'image/jpeg');
@@ -492,7 +502,7 @@ function fuyr_wxp_settings_page() {
                         </div>
                         <input type="hidden" id="fuyr_cover_id" name="fuyr_wxp_settings[cover_id]" value="<?php echo intval($o['cover_id']); ?>">
                         <button type="button" class="button" id="fuyr_cover_btn">选择封面图（底图）</button>
-                        <p class="description">上传一张<strong>底图</strong>（如地图风格），插件会在其上自动叠加<strong>北京时间日期/时间</strong>作封面，WP 媒体库只保存这张底图，叠加后的图仅临时上传微信、不落库。建议尺寸 900×383 或 1:1。需服务器启用 PHP-GD（常见主机默认已开）。</p>
+                        <p class="description">上传一张<strong>底图</strong>（如地图风格），插件会在其上自动叠加<strong>北京时间日期/时间</strong>作封面，WP 媒体库只保存这张底图，叠加后的图仅临时上传微信、不落库。建议尺寸 900×383 或 1:1。需服务器启用 PHP-GD（常见主机默认已开）。<strong>留空则自动使用插件内置默认封面（地图风格），无需手动上传。</strong></p>
                     </td>
                 </tr>
             </table>
