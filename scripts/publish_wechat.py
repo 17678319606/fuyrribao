@@ -1,27 +1,33 @@
 #!/usr/bin/env python3
-"""步骤4（公众号推送）：把日报 JSON 渲染为图文 HTML，上传封面素材 + 图文，按 WX_PUBLISH_MODE 推送。
+"""步骤4（公众号推送）：把日报 JSON 渲染为图文 HTML，上传封面素材 + 图文，按账号配置推送。
 
-三模式（环境变量 WX_PUBLISH_MODE 切换）：
-  - mass        : 认证订阅号每天 API 群发（message/mass/sendall，粉丝微信直接收到未读）
-  - freepublish : 发布到公众号（freepublish/submit，不占群发次数；粉丝需点开公众号才看到）【默认】
+多账号支持（环境变量，二选一）：
+  - WX_ACCOUNTS（推荐，多账号）：JSON 数组，每个账号：
+      [{"name":"个人订阅号","appid":"wx...","secret":"...","mode":"freepublish","default":true},
+       {"name":"认证订阅号","appid":"wx...","secret":"...","mode":"mass"}]
+    mode 决定该账号的推送方式；default:true 的账号为「主账号」（WX_PUSH_ALL=true 时全部推送）。
+  - 单账号兼容（旧式）：WX_APPID + WX_APPSECRET + WX_PUBLISH_MODE。
+
+三模式（每账号各自 mode，或单账号 WX_PUBLISH_MODE 切换）：
+  - mass        : 认证订阅号/认证服务号 API 群发（message/mass/sendall，粉丝直接收到未读）
+  - freepublish : 发布到公众号（freepublish/submit，不占群发次数；粉丝需点开看）【默认】
   - draft       : 仅上传到草稿箱（draft/add），你在后台点一下「群发」即可（半自动）
 
+「认证号总类」预留说明（微信平台规则）：
+  - 认证订阅号：每天可 mass 群发 1 次 → 用 mode=mass，粉丝直接收到未读（最贴合每日自动群发）。
+  - 认证服务号：每月仅群发 4 次 → 同样可用 mode=mass，但额度不足日更，建议仅精选 4 篇/月或改用 freepublish。
+  - 个人/未认证订阅号：无 mass 权限（48001）→ 只能用 freepublish / draft。
+  代码对三类均兼容，差异仅在账号类型对应的 mode 与微信后台额度。
+
 与 WP 发布的关系（单仓双推、AI 只跑一次）：
-  - fetch_signals → generate_report（AI 增量，仅新信号调 AI）→ publish_wp（增量更新同日文章）
-    → publish_wechat（本脚本）
-  - 本脚本三道门控，确保不浪费、不重复：
-    1) 未配置 WX_PUBLISH_MODE → 直接跳过（仅发 WP，兼容「只发网站」场景）；
-    2) 当前北京小时 < WX_FINAL_HOUR（默认 20）→ 跳过，等当日最后一次触发再发，
-       保证公众号文章是当天最全的一版；
-    3) 当日已推送（state/wechat_published_{date}.flag 存在）→ 跳过，绝不一天发多篇。
+  - fetch_signals → generate_report（AI 增量）→ publish_wp（增量更新同日文章）→ publish_wechat（本脚本）
+  - 本脚本门控，确保不浪费、不重复：
+    1) 未配置任何账号（WX_ACCOUNTS / WX_APPID）→ 仅发 WP，跳过公众号；
+    2) 当前北京小时 < WX_FINAL_HOUR（默认 19）→ 跳过，等当日末次触发再发最全版；
+    3) 当日已推送过的账号（state/wechat_published_{date}.json 记录）→ 跳过，绝不一天多篇。
 
-安全：WX_APPID / WX_APPSECRET 走仓库「环境变量 / Secrets」，绝不硬编码。
+安全：appid/secret 走仓库「环境变量 / Secrets」，绝不硬编码。
 封面：由 generate_cover.make_cover 动态生成「副业日报 + 日期」，上传为 thumb 素材。
-
-微信约束提醒：
-  - 个人/未认证订阅号无 mass/sendall 权限（返回 48001 api unauthorized），只能用 freepublish/draft。
-  - 认证订阅号每天可群发 1 次；认证服务号每月仅 4 次（不够日更）。
-  - 正文 HTML 不支持外部图片 URL（会被过滤），本渲染全部内联文字卡片，无外链图片。
 """
 import os
 import sys
@@ -276,65 +282,62 @@ def _bj_now():
     return datetime.datetime.now(tz)
 
 
-def main():
-    C.ensure_dirs()
-    now_bj = _bj_now()
-    today = now_bj.strftime("%Y-%m-%d")
-    hour = now_bj.hour
+def _load_accounts():
+    """返回账号列表（dict）。支持 WX_ACCOUNTS(JSON) 与单账号兼容(WX_APPID)。"""
+    raw = (os.environ.get("WX_ACCOUNTS") or "").strip()
+    if raw:
+        try:
+            lst = json.loads(raw)
+            if isinstance(lst, list) and lst:
+                return lst
+        except Exception as e:
+            LOG.warning("WX_ACCOUNTS 解析失败（需 JSON 数组）：%s", e)
+    appid = (os.environ.get("WX_APPID") or "").strip()
+    secret = (os.environ.get("WX_APPSECRET") or "").strip()
+    if appid and secret:
+        return [{
+            "name": "default",
+            "appid": appid,
+            "secret": secret,
+            "mode": (os.environ.get("WX_PUBLISH_MODE") or "freepublish").strip().lower(),
+            "default": True,
+        }]
+    return []
 
-    # ── 门控 1：未配置 WX_PUBLISH_MODE → 仅发 WP，跳过公众号 ──
-    mode = (os.environ.get("WX_PUBLISH_MODE", "") or "").strip().lower()
-    if not mode:
-        LOG.info("未配置 WX_PUBLISH_MODE，跳过公众号推送（仅发布 WordPress）。")
-        return
-    if mode not in ("mass", "freepublish", "draft"):
-        LOG.warning("WX_PUBLISH_MODE=%r 非法（应为 mass/freepublish/draft），跳过。", mode)
-        return
 
-    # ── 门控 2：仅当日末次触发（北京小时 >= WX_FINAL_HOUR，默认 20）才发，保证内容最全 ──
-    final_hour = int((os.environ.get("WX_FINAL_HOUR", "20") or "20").strip() or "20")
-    if hour < final_hour:
-        LOG.info("当前北京小时=%d < 末次触发小时=%d，跳过公众号推送（待末次触发时再发当日最全版）。",
-                 hour, final_hour)
-        return
+def _select_targets(accounts):
+    """WX_PUSH_ALL=true → 全部；否则仅 default 账号（无 default 取首个）。"""
+    push_all = (os.environ.get("WX_PUSH_ALL") or "").strip().lower() in ("1", "true", "yes")
+    if push_all:
+        return accounts
+    for a in accounts:
+        if a.get("default"):
+            return [a]
+    return [accounts[0]]
 
-    appid = os.environ.get("WX_APPID", "")
-    secret = os.environ.get("WX_APPSECRET", "")
+
+def _push_one(acc, report, today, now_bj):
+    """对单个账号推送，返回实际使用的 mode 字符串。"""
+    name = acc.get("name", "?")
+    appid = (acc.get("appid") or "").strip()
+    secret = (acc.get("secret") or "").strip()
+    mode = (acc.get("mode") or "freepublish").strip().lower()
+    author = acc.get("author") or os.environ.get("WX_AUTHOR", "副业日报")
     if not appid or not secret:
-        LOG.error("配置了 WX_PUBLISH_MODE 但缺少 WX_APPID / WX_APPSECRET（仓库环境变量未填），无法推送。")
-        raise SystemExit("missing wechat credentials")
+        raise RuntimeError("账号[%s] 缺少 appid/secret" % name)
+    if mode not in ("mass", "freepublish", "draft"):
+        raise RuntimeError("账号[%s] mode=%r 非法（应为 mass/freepublish/draft）" % (name, mode))
 
-    # ── 门控 3：当日已推送过 → 跳过，绝不一天多篇 ──
-    flag = os.path.join(C.STATE_DIR, f"wechat_published_{today}.flag")
-    if os.path.exists(flag):
-        LOG.info("今日公众号已推送（%s 存在），跳过重复推送。", flag)
-        return
-
-    report = C.load_json(os.path.join(C.DATA_DIR, f"report-{today}.json"), {})
-    if not report:
-        LOG.error("无日报数据（report-%s.json 不存在），跳过推送。", today)
-        raise SystemExit("no report data")
-
-    total = sum(len(report.get("modules", {}).get(k, [])) for k, _ in MODULES)
-    ds = report.get("daily_summary", {})
-    if total == 0 and not ds.get("methodology"):
-        LOG.info("今日无实质内容，跳过推送（不发布空文章）。")
-        return
-
-    # 1) 封面（副业日报 + 日期，与标题一致）
-    cover_path = os.path.join(C.DATA_DIR, f"cover-{today}.png")
+    # 封面（副业日报 + 日期，与标题一致）
+    cover_path = os.path.join(C.DATA_DIR, "cover-%s.png" % today)
     make_cover(today, cover_path)
 
-    # 2) token + 上传封面素材
     token = get_token(appid, secret)
     cover_media_id = upload_image(token, cover_path)
 
-    # 3) 渲染正文
     content = render_wechat(report)
-    title = f"副业日报 {today}"  # 与封面一致：副业日报 + 日期
-    digest = (ds.get("methodology") or "")[:64]
-    author = os.environ.get("WX_AUTHOR", "副业日报")
-
+    title = "副业日报 %s" % today  # 与封面一致
+    digest = (report.get("daily_summary", {}).get("methodology") or "")[:64]
     article = {
         "title": title,
         "thumb_media_id": cover_media_id,
@@ -345,30 +348,87 @@ def main():
         "show_cover_pic": 1,
     }
 
-    # 4) 按模式推送
-    try:
-        if mode == "mass":
-            mid = add_news(token, article)
-            res = mass_sendall(token, mid, today)
-            LOG.info("已群发（mass/sendall）: msg_id=%s —— 粉丝微信将直接收到未读。", res.get("msg_id"))
-            print("WECHAT_MSG_ID=" + str(res.get("msg_id", "")))
-        elif mode == "draft":
-            mid = draft_add(token, article)
-            LOG.info("已存入草稿箱（draft/add）: media_id=%s —— 请到公众号后台点「群发」。", mid)
-            print("WECHAT_DRAFT_MEDIA_ID=" + mid)
-        else:
-            mid = add_news(token, article)
-            pid = freepublish(token, mid)
-            LOG.info("已发布（freepublish/submit）: publish_id=%s —— 不主动推送，粉丝需点开公众号看。", pid)
-            print("WECHAT_PUBLISH_ID=" + str(pid))
-        # 推送成功 → 写当日已推送标记（防重复）
+    if mode == "mass":
+        mid = add_news(token, article)
+        res = mass_sendall(token, mid, today)
+        LOG.info("账号[%s] 已群发（mass/sendall）: msg_id=%s", name, res.get("msg_id"))
+        print("WECHAT_MSG_ID=" + str(res.get("msg_id", "")))
+    elif mode == "draft":
+        mid = draft_add(token, article)
+        LOG.info("账号[%s] 已存草稿箱（draft/add）: media_id=%s —— 请后台点群发。", name, mid)
+        print("WECHAT_DRAFT_MEDIA_ID=" + mid)
+    else:
+        mid = add_news(token, article)
+        pid = freepublish(token, mid)
+        LOG.info("账号[%s] 已发布（freepublish/submit）: publish_id=%s", name, pid)
+        print("WECHAT_PUBLISH_ID=" + str(pid))
+    return mode
+
+
+def main():
+    C.ensure_dirs()
+    now_bj = _bj_now()
+    today = now_bj.strftime("%Y-%m-%d")
+    hour = now_bj.hour
+
+    # ── 门控 1：未配置任何账号 → 仅发 WP，跳过公众号 ──
+    accounts = _load_accounts()
+    if not accounts:
+        LOG.info("未配置公众号账号（WX_ACCOUNTS / WX_APPID），跳过公众号推送（仅发布 WordPress）。")
+        return
+
+    # ── 门控 2：仅当日末次触发（北京小时 >= WX_FINAL_HOUR，默认 19）才发，保证内容最全 ──
+    final_hour = int((os.environ.get("WX_FINAL_HOUR", "19") or "19").strip() or "19")
+    if hour < final_hour:
+        LOG.info("当前北京小时=%d < 末次触发小时=%d，跳过公众号推送（待末次触发时再发当日最全版）。",
+                 hour, final_hour)
+        return
+
+    # ── 选目标账号 ──
+    targets = _select_targets(accounts)
+
+    # ── 读日报数据 ──
+    report = C.load_json(os.path.join(C.DATA_DIR, "report-%s.json" % today), {})
+    if not report:
+        LOG.error("无日报数据（report-%s.json 不存在），跳过推送。", today)
+        raise SystemExit("no report data")
+    total = sum(len(report.get("modules", {}).get(k, [])) for k, _ in MODULES)
+    ds = report.get("daily_summary", {})
+    if total == 0 and not ds.get("methodology"):
+        LOG.info("今日无实质内容，跳过推送（不发布空文章）。")
+        return
+
+    # ── 门控 3：当日已推送过的账号跳过，绝不一天多篇 ──
+    flag = os.path.join(C.STATE_DIR, "wechat_published_%s.json" % today)
+    sent = {}
+    if os.path.exists(flag):
         try:
-            open(flag, "w").write(f"{mode} {now_bj.isoformat()}")
+            sent = json.load(open(flag, encoding="utf-8"))
+        except Exception:
+            sent = {}
+    sent_names = set(sent.get("sent", []))
+
+    done = []
+    for acc in targets:
+        nm = acc.get("name", "?")
+        if nm in sent_names:
+            LOG.info("账号[%s] 今日已推送，跳过重复。", nm)
+            continue
+        try:
+            mode = _push_one(acc, report, today, now_bj)
+            sent_names.add(nm)
+            done.append("%s:%s" % (nm, mode))
+            LOG.info("账号[%s] 推送完成（%s）。", nm, mode)
         except Exception as e:
-            LOG.warning("写入 wechat_published 标记失败（不影响本次已推送）: %s", e)
-    except Exception as e:
-        LOG.error("公众号推送失败: %s", e)
-        raise
+            LOG.error("账号[%s] 推送失败: %s", nm, e)
+            raise
+
+    if done:
+        try:
+            json.dump({"sent": list(sent_names), "done": done, "at": now_bj.isoformat()},
+                      open(flag, "w", encoding="utf-8"), ensure_ascii=False)
+        except Exception as e:
+            LOG.warning("写入推送标记失败（不影响本次已推送）: %s", e)
 
 
 if __name__ == "__main__":

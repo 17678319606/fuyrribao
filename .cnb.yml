@@ -1,18 +1,20 @@
-# 副业日报 CNB 流水线（采集 → AI生成 → WP发布 → 公众号推送，单仓双推）
+# 副业日报 CNB 流水线（采集 → AI生成 → WP发布 → 公众号推送 → 企业微信通知，单仓双推）
 # ─────────────────────────────────────────────────────────────────────
-# 时区：Asia/Shanghai（北京时间）。对应原 GitHub Actions 的 UTC 22:01 / 11:40 / 12:10
-#       即 北京 06:01（晨间首版）/ 19:40（晚间补发1）/ 20:10（晚间补发2 + 公众号末次推送）。
-# AI 只跑一次（增量累积：仅新信号调 AI）；WP 每次增量更新同日文章；公众号仅在末次触发(北京≥20点)发一次。
+# 时区：Asia/Shanghai（北京时间）。crontab 直接写北京时间，无需换算 UTC。
+# 每天两次定时：06:00（晨间首版，WP 增量；公众号未到末次触发，跳过）
+#             19:00（末次触发，WP 增量 + 公众号推送当日最全版 + 汇总通知）
+# AI 只跑一次（增量累积：仅新信号调 AI）；WP 每次增量更新同日文章；
+#   公众号仅在末次触发(北京≥19点)发一次（WX_FINAL_HOUR 默认 19）；失败也发企业微信告警。
 # 密钥：全部来自 CNB 仓库「设置 → 环境变量」，绝不硬编码。需用户填入：
-#   - AI：GEMINI_API_KEY（或 AI_API_KEY / AI_FALLBACK_KEY）、AI_SIDEHUSTLE_API_KEY
-#   - WP：WP_APP_PASSWORD
-#   - 公众号（可选，不填则仅发 WP）：WX_APPID、WX_APPSECRET、WX_PUBLISH_MODE(mass/freepublish/draft)、WX_AUTHOR、WX_FINAL_HOUR(默认20)
+#   - AI：GEMINI_API_KEY（或 AI_API_KEY）、AI_SIDEHUSTLE_API_KEY（兜底网关）
+#   - WP：WP_APP_PASSWORD（WP_URL/WP_USER/WP_CATEGORY_NAME 见下文默认，可按需改）
+#   - 公众号（可选）：WX_ACCOUNTS（JSON 多账号，推荐）或 WX_APPID+WX_APPSECRET+WX_PUBLISH_MODE；
+#            WX_PUBLISH_MODE / 每账号 mode：mass(认证订阅号群发) / freepublish(发布不推) / draft(草稿)
+#            WX_FINAL_HOUR(默认19) / WX_PUSH_ALL(true 全账号推送) / WX_AUTHOR
+#   - 通知（可选）：WXWORK_WEBHOOK（企业微信机器人 Webhook，失败告警+末次汇总）
 # 封面：「副业日报 + 日期」由 generate_cover 动态生成（依赖 fonts-noto-cjk 免费字体）。
 # 注意：不监听 push 事件，避免心跳回写再次触发流水线形成死循环。
-# 触发方式：
-#   - crontab ×3 ：系统定时（需 push 后调用 crontab/sync 注册）
-#   - web_trigger ：CNB 网页「运行」按钮手动触发
-#   - api_trigger ：通过 Open API build/start（event=api_trigger）触发
+# 触发方式：crontab ×2（系统定时）/ web_trigger（网页运行）/ api_trigger（Open API build/start）。
 
 .cnb-job: &cnb-job
   - docker:
@@ -20,32 +22,20 @@
     runner:
       cpus: 1
     stages:
-      - name: 采集-生成-WP发布-公众号推送
+      - name: 采集-生成-WP-公众号-通知
         script: |
           set -e
-          # 安装中文字体（封面图渲染「副业日报」需要；失败不影响其他步骤）
+          # 安装中文字体（封面「副业日报」需要；失败不影响其他步骤）
           apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq fonts-noto-cjk >/dev/null 2>&1 || true
           pip install --quiet requests beautifulsoup4 feedparser lxml pysocks pillow
-          python scripts/fetch_signals.py
-          python scripts/generate_report.py
-          python scripts/publish_wp.py
-          # 公众号推送：未配置 WX_PUBLISH_MODE 会自动跳过；失败不阻断当日 WP 已发布内容
-          python scripts/publish_wechat.py || echo "⚠️ 公众号推送失败（不影响 WordPress 已发布）"
-          # —— 增量累积状态回写（持久化 state/，供下次运行增量刷新）——
-          git config user.email "bot@cnb.cool"
-          git config user.name "cnb-bot"
-          echo "$(date '+%F %T')" > state/heartbeat.txt
-          git add -A state/ 2>/dev/null || true
-          git diff --cached --quiet || git commit -m "daily: $(date +%F) [heartbeat]"
-          git push "https://cnb:${CNB_TOKEN}@cnb.cool/jinbufenzi/fuyrribao.git" HEAD:main 2>&1 | tail -3 || true
+          # 单入口编排：抓取→生成→发WP→发公众号→通知（通知必定执行，失败也报）
+          python scripts/run_daily.py
 
 main:
-  # 晨间首版（北京 06:01）—— WP 增量；公众号未到末次触发，自动跳过
-  "crontab: 1 6 * * *": !reference [.cnb-job]
-  # 晚间补发 1（北京 19:40）—— WP 增量；公众号未到末次触发，自动跳过
-  "crontab: 40 19 * * *": !reference [.cnb-job]
-  # 晚间补发 2（北京 20:10）—— WP 增量 + 公众号末次推送（北京≥20点放行）
-  "crontab: 10 20 * * *": !reference [.cnb-job]
+  # 晨间首版（北京 06:00）—— WP 增量；公众号未到末次触发，自动跳过
+  "crontab: 0 6 * * *": !reference [.cnb-job]
+  # 末次触发（北京 19:00）—— WP 增量 + 公众号推送当日最全版 + 汇总通知
+  "crontab: 0 19 * * *": !reference [.cnb-job]
   # 网页「运行」按钮手动触发（验证 / 补发，不形成循环）
   web_trigger: !reference [.cnb-job]
   # Open API build/start（event=api_trigger）触发，用于自动化验证
