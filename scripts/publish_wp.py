@@ -209,8 +209,13 @@ def _strip_links(html):
         r'<a\b(?![^>]*data-fuyr-src)[^>]*?>(.*?)</a>',
         r'<span style="%s">\1</span>' % S_TEXT_LINK,
         html, flags=re.S | re.I)
-    # 2) 把可见的裸 URL 替换为空（通常只剩括号或空白）
-    html = re.sub(r'https?://[^\s<>"\')]+', '', html, flags=re.I)
+    # 2) 把正文里"可见的裸 URL"替换为空（保持阅读清爽、无外链）。
+    #    关键修复：
+    #    a) 负向后顾 (?<!\bhref=")(?<!\bsrc=") 排除 <a href="..."> / <img src="..."> 里的 URL，
+    #       否则会把"阅读原文"等来源链接的 href 一并清空（导致链接点不动）——此前已上线版本存在此回归；
+    #    b) 字符集排除 CJK（一-鿿），URL 遇到中文即停，避免误吞紧跟其后的中文正文
+    #       （这正是"长内容末尾被轻微截断"的根因之一）。
+    html = re.sub(r'(?<!href=")(?<!src=")https?://[^\s<>"\')一-鿿]+', '', html, flags=re.I)
     # 3) 清理可能留下的空括号、多余空白
     html = re.sub(r'\(\s*\)', '', html)
     html = re.sub(r'[ ]{2,}', ' ', html)

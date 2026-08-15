@@ -48,9 +48,11 @@ REQ_TIMEOUT = (20, 300)     # 默认读超时 300s；可被环境变量 AI_REQUE
 GEN_RETRIES = 4             # 外层生成重试 4 次：用户要求必须 AI 输出、可稍晚，多给几次机会
 STREAM_MAX_SECONDS = 900    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
 MAX_INPUT_SIGNALS = 50      # 送入 AI 的候选上限（控制上下文长度保稳定）
-MAX_OUTPUT_TOKENS = 12000   # 输出 token 上限（收敛输出，降低超时/截断概率；
+MAX_OUTPUT_TOKENS = 16000   # 输出 token 上限（收敛输出，降低超时/截断概率；
                               # 探针实测 35 候选大 prompt 在 6000 处被截断导致 JSON 残缺，
-                              # 提到 12000 留足 3 模块结构余量，流式回传下 524 风险仍可控）
+                              # 后提到 12000；实测大日报（条目多、字段全）仍会触顶导致
+                              # 末尾条目/字段被截，故再提到 16000 留足余量；
+                              # 流式回传下 524 风险仍可控；非流式兜底仅极偶发触发）
 
 # —— 分批筛选（避免大量候选被直接截断丢弃，提升内容丰富度）——
 SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
@@ -83,9 +85,14 @@ def _force_non_stream():
     return raw in ("1", "true", "yes", "on")
 
 
-def _trim_signals_for_prompt(signals, max_content=400):
-    """为 prompt 裁剪信号：保留完整元数据，content 截断到 max_content 字符，
-    减少网关上下文压力，同时保留关键信息供 AI 判断。"""
+def _trim_signals_for_prompt(signals, max_content=1500):
+    """为 prompt 裁剪信号：保留完整元数据，content 截断到 max_content 字符。
+
+    说明：此前默认 400 字过短——长文章 AI 只看到前 400 字，生成的「建议怎么做 /
+    MVP」「变现说明」等字段会缺失后半段信息，表现为"长内容被轻微截断"。
+    提到 1500 字：绝大多数文章的关键信息（信号、做法、数据）都在前 1500 字内，
+    AI 据此可写出完整摘要；同时仍控制上下文，避免大 prompt 触发网关 400/超时。
+    """
     out = []
     for s in signals:
         c = dict(s)
@@ -1074,9 +1081,9 @@ def main():
             LOG.error("无法读取 SKILL.md：%s", e)
             raise
 
-        # 为最终生成裁剪信号：保留元数据，content 截断到 400 字符，
-        # 减少高延迟网关上下文压力，降低 400/截断概率。
-        prompt_signals = _trim_signals_for_prompt(new_signals, max_content=400)
+        # 为最终生成裁剪信号：保留元数据，content 截断到 1500 字符，
+        # 兼顾"给 AI 足够上下文写出完整摘要"与"控制上下文压力防网关 400/超时"。
+        prompt_signals = _trim_signals_for_prompt(new_signals, max_content=1500)
         user_prompt = (
             f"今天是 {today}（北京时间）。以下是已完成去重的当日【新增】信号（JSON），"
             f"请仅基于这些新增信号生成条目，勿重复已有内容：\n"

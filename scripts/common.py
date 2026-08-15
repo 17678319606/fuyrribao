@@ -21,7 +21,7 @@ MAX_CANDIDATES = 1500        # 单日候选上限（data/ 已 gitignore，不进
 # 渲染器版本：每次修改 publish_wp.py 的排版/结构时 +1。
 # 发布到 WP 的文章顶部会写入 <!-- dr-renderer:N --> 标记；
 # 定时/宝塔触发时发现线上当日文章版本过旧则强制重渲染，使修复自动落地（无需手动 Run workflow）。
-RENDERER_VERSION = 5
+RENDERER_VERSION = 6
 
 BJ = datetime.timezone(datetime.timedelta(hours=8))
 
