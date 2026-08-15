@@ -169,7 +169,7 @@ jobs:
           msg = "【副业日报】今日有 %d 个内容源抓取失败：%s\n请检查源可用性（不影响已成功源的日报生成）。" % (
               len(failed), ", ".join(failed))
           payload = json.dumps({"msgtype": "text", "text": {"content": msg}}).encode("utf-8")
-          url = "${{ secrets.WXWORK_WEBHOOK || 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0' }}"
+          url = "${{ secrets.WXWORK_WEBHOOK || '<WXWORK_WEBHOOK_PLACEHOLDER>' }}"
           try:
               req = urllib.request.Request(url, data=payload,
                                            headers={"Content-Type": "application/json"}, method="POST")
@@ -207,6 +207,6 @@ jobs:
       - name: 失败告警（企业微信机器人）
         if: failure()
         run: |
-          curl -s -o /dev/null -X POST "${{ secrets.WXWORK_WEBHOOK || 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0' }}" \
+          curl -s -o /dev/null -X POST "${{ secrets.WXWORK_WEBHOOK || '<WXWORK_WEBHOOK_PLACEHOLDER>' }}" \
             -H "Content-Type: application/json" \
             -d "{\"msgtype\":\"text\",\"text\":{\"content\":\"【副业日报】GitHub Actions 今日生成失败，请检查。\nrun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}}"

@@ -24,7 +24,7 @@ PAT_FILE="$SCRIPT_DIR/.gh_pat"
 LOCK="$SCRIPT_DIR/.trigger.lock"
 LOG_FILE="$SCRIPT_DIR/cron.log"
 
-WECOM_URL="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ca5e918f-8e98-4c96-9734-8e5d27b298d0"
+WECOM_URL="${WECOM_URL:-https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<WXWORK_WEBHOOK_KEY>}"
 ALERT_EMAIL="weixinkaifa@jinbufenzi.work"
 
 # ↓↓↓ 邮件 SMTP 配置：按你的服务器填写；全部留空则仅用企业微信告警 ↓↓↓
