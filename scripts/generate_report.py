@@ -940,17 +940,33 @@ def main():
     # 兼容多套命名：GEMINI_API_KEY/AI_API_KEY/ai_api_key（历史+原项目小写约定）；
     # AI_SIDEHUSTLE_API_KEY / AI_FALLBACK_KEY（兜底）。模型同理 AI_MODEL/ai_model。
     base_urls = _parse_base_urls()
-    api_key = (os.environ.get("GEMINI_API_KEY", "") or os.environ.get("AI_API_KEY", "")
-               or os.environ.get("ai_api_key", ""))
-    fallback_key = (os.environ.get("AI_SIDEHUSTLE_API_KEY", "") or os.environ.get("AI_FALLBACK_KEY", "")
-                    or os.environ.get("ai_api_key", ""))
+    _first_base = (base_urls[0] if base_urls else "")
+    # 主用 key 必须与网关配对，绝不能拿 A 家 key 打 B 家网关（否则 401/鉴权失败）：
+    # - 显式设置了网关(ai_base_url/AI_BASE_URL) → 优先用与其配对的主 key(AI_API_KEY/ai_api_key)，
+    #   仅当显式网关确为 Gemini 时才回落 GEMINI_API_KEY；
+    # - 否则默认走璇玑国内网关 → 用璇玑兼容 key(AI_API_KEY/ai_api_key/AI_SIDEHUSTLE_API_KEY)，
+    #   GEMINI_API_KEY 不参与（它打璇玑必失败）。
+    _explicit_base = bool(os.environ.get("ai_base_url", "").strip()
+                          or os.environ.get("AI_BASE_URL", "").strip())
+    if _explicit_base:
+        api_key = (os.environ.get("AI_API_KEY", "").strip()
+                   or os.environ.get("ai_api_key", "").strip())
+        if not api_key and "generativelanguage" in _first_base:
+            api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    else:
+        api_key = (os.environ.get("AI_API_KEY", "").strip()
+                   or os.environ.get("ai_api_key", "").strip()
+                   or os.environ.get("AI_SIDEHUSTLE_API_KEY", "").strip())
+    # 兜底端点 key（仅当 AI_FALLBACK_URL 存在时才会被组装成端点）
+    fallback_key = (os.environ.get("AI_SIDEHUSTLE_API_KEY", "").strip()
+                    or os.environ.get("AI_FALLBACK_KEY", "").strip()
+                    or os.environ.get("ai_api_key", "").strip())
     # 模型默认值随网关自适应：国内网关 ai.jinbufenzi.com 默认 qwen3.6-35b-a3b；
     # 海外 Gemini 默认 gemini-flash-latest。用户可用 AI_MODEL/ai_model 显式覆盖。
     _default_model = "gemini-flash-latest"
-    _first_base = (base_urls[0] if base_urls else "")
     if "jinbufenzi" in _first_base:
         _default_model = "qwen3.6-35b-a3b"
-    model = (os.environ.get("AI_MODEL", "") or os.environ.get("ai_model", "")
+    model = (os.environ.get("AI_MODEL", "").strip() or os.environ.get("ai_model", "").strip()
              or _default_model)
     if _force_non_stream():
         LOG.info("强制非流式模式：所有 AI 调用使用整包返回（可在 Secret AI_FORCE_NON_STREAM=0 关闭）")
