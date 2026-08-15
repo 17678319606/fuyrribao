@@ -33,5 +33,6 @@
   { "id": "woshipm", "type": "rss", "url": "https://www.woshipm.com/feed", "name": "人人都是产品经理" },
   { "id": "growthhackers", "type": "rss", "url": "https://growthhackers.com/feed", "name": "GrowthHackers" },
   { "id": "devto", "type": "rss", "url": "https://dev.to/feed", "name": "Dev.to" },
-  { "id": "lobsters", "type": "rss", "url": "https://lobste.rs/rss", "name": "Lobsters" }
+  { "id": "lobsters", "type": "rss", "url": "https://lobste.rs/rss", "name": "Lobsters" },
+  { "id": "hn_show", "type": "rss", "url": "https://hnrss.org/show", "name": "Hacker News Show" }
 ]

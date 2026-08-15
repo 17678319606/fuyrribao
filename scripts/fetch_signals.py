@@ -329,6 +329,22 @@ def cleanup():
             C.save_seen(kept)
             LOG.info("去重表裁剪 %d 条（>%d天）", removed, C.RETENTION_DAYS)
 
+    # 同日累积日报：state/ 走缓存，长期运行会累积 daily_report_<date>.json，需裁剪避免缓存膨胀。
+    for fp in glob.glob(os.path.join(C.STATE_DIR, "daily_report_*.json")):
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(fp))
+        if not m:
+            continue
+        try:
+            d = datetime.datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=C.BJ)
+        except Exception:
+            continue
+        if d < cutoff:
+            try:
+                os.remove(fp)
+                LOG.info("清理过期同日累积日报: %s", os.path.basename(fp))
+            except OSError:
+                pass
+
 
 def main():
     C.ensure_dirs()
@@ -408,7 +424,7 @@ def main():
     # 记录源可用性状态（供巡检/告警使用）
     try:
         C.save_json(os.path.join(C.STATE_DIR, "source_status.json"),
-                    {"date": today, "status": src_status})
+                    {"date": today, "status": src_status, "total_candidates": len(candidates)})
         failed = [k for k, v in src_status.items() if not v["ok"]]
         if failed:
             LOG.warning("⚠️ 今日有 %d 个源抓取失败: %s", len(failed), failed)

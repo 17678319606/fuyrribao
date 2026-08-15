@@ -4,6 +4,7 @@ import re
 import json
 import logging
 import datetime
+import hashlib
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(REPO_ROOT, "data")
@@ -87,31 +88,18 @@ def extract_renderer_version(post_content):
     return int(m.group(1)) if m else 0
 
 
-def should_regenerate(post_content, event_name):
-    """决定是否需要对当日文章重生成。
-
-    - 无当日文章 → 生成（True）
-    - 线上版本 < 当前版本（含无标记=旧版） → 强制重生成（True），使修复自动落地
-    - 版本已最新：
-        * schedule（定时） → 跳过（省额度，由累积逻辑增量刷新）
-        * workflow_dispatch / 手动 → 覆盖（True）
-    """
-    if not post_content:
-        return True
-    v = extract_renderer_version(post_content)
-    if v < RENDERER_VERSION:
-        return True
-    if event_name == "schedule":
-        return False
-    return True
-
-
 # ---------- 同日增量累积：保留旧内容 + 追加新内容 ----------
 
 def item_dedup_key(item):
-    """稳定的去重键：优先 source_url，其次 title。"""
+    """稳定的去重键：优先 source_url，其次 title，再次内容哈希（避免无 url/title 的条目跨运行永不 dedup）。"""
     if isinstance(item, dict):
-        return item.get("source_url") or item.get("title") or id(item)
+        k = item.get("source_url") or item.get("title")
+        if k:
+            return k
+        sig = item.get("signal") or item.get("content") or ""
+        if sig:
+            return "h:" + hashlib.md5(sig.encode("utf-8", "ignore")).hexdigest()[:16]
+        return id(item)
     return str(item)
 
 

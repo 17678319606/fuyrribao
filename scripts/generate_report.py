@@ -26,6 +26,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
+import score  # 打分地基（通用层 + 主题层 yaml）；当前仅 SHADOW，不拦截
 
 LOG = C.get_logger()
 
@@ -865,7 +866,10 @@ import re
 # 代码后处理只做「结构性兜底」（见 _is_hollow_item）：识别明显没填 actionable 字段的硬伤。
 
 # 套话库：纯定性空话，无 actionable value
-_HOLLOW_FLUFF_LITERAL = ["N/A", "n/a", "暂无", "待定", "详见原文", "无", "—", "-", "／",
+# v4.5：移除 "-"/"—"/"／" 等标点型"套话"——它们是正常行动字段（如"先在小红书发 3 篇 - 测试钩子"）
+# 的组成部分，按裸子串匹配会误判整条行动字段为空心，导致 GOOD 内容被错误剔除（召回损失）。
+# 套话只保留明确的定性空话短语。
+_HOLLOW_FLUFF_LITERAL = ["N/A", "n/a", "暂无", "待定", "详见原文", "无",
                          "潜力巨大", "值得关注", "具有重要意义", "不可忽视",
                          "具有深远影响", "涌动", "频繁", "关注行业动态",
                          "可通过自媒体", "分享观点", "获取机会", "保持关注",
@@ -1604,6 +1608,12 @@ def main():
     C.save_json(daily_state_path, report)
     out_path = os.path.join(DATA_DIR, f"report-{today}.json")
     C.save_json(out_path, report)
+    # 打分地基（SHADOW）：仅计算并汇总质量分数分布，不拦截（避免误杀）；
+    # 待 shadow 数据验证精确率≥80% 后再转主动拦截。详见 themes/sidehustle.json。
+    try:
+        score.shadow_score_report(report)
+    except Exception as e:
+        LOG.warning("打分地基 SHADOW 评估跳过（不影响发布）: %s", e)
     _emit_changed(True)
     total = sum(len(report.get("modules", {}).get(k, [])) for k in C.MODULES)
     LOG.info("日报累积更新：当日共 %d 条（新增 %d），写入 %s，总耗时 %.1fs",

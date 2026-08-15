@@ -387,6 +387,11 @@ def _record_posted(today, post_id, link):
 
 def main():
     C.ensure_dirs()
+    # 发布开关：FUYR_DISABLE_PUBLISH=1 时仅渲染不发布（用于 CNB 等副流水线，避免双 CI 同发一个 WP 造成重复/覆盖）。
+    # 让 GitHub Actions 成为唯一发布方；CNB 仅做"生成+诊断"，互不打架。
+    if os.environ.get("FUYR_DISABLE_PUBLISH", "").strip() in ("1", "true", "True", "yes"):
+        LOG.info("FUYR_DISABLE_PUBLISH=1：跳过 WordPress 发布（仅校验/渲染），不触碰线上文章。")
+        return
     today = C.date_str()
     # 同日增量累积：若 generate 判定无变化（无新增信号且非强制重渲染），跳过重渲染 WP 以免冗余更新。
     flag_path = os.path.join(C.STATE_DIR, ".gen_changed")

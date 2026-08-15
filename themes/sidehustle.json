@@ -1,0 +1,29 @@
+{
+  "theme": "sidehustle",
+  "description": "副业/AI/独立开发/增长日报",
+  "junk_categories": [
+    "融资快讯/名人八卦",
+    "工具/资源堆砌无 actionable",
+    "焦虑贩卖/标题党",
+    "蹭热点无增量",
+    "伪干货/正确废话",
+    "同玩法窄地域服务聚类冗余",
+    "第三人称被动罗列无读者视角",
+    "信息增量不足（无真名/数字/步骤/人群）"
+  ],
+  "region_neutral": {
+    "enabled": true,
+    "rule": "地域=获客渠道/目标客户定位的合法增长内容绝不因地域词降权；仅同模块+同地域+同服务≥3才收口"
+  },
+  "quality_signals": ["真名/具体项目", "数字/数据", "可操作步骤", "明确人群/场景"],
+  "weights": {
+    "authority": 0.25,
+    "actionable": 0.25,
+    "recency": 0.15,
+    "originality": 0.20,
+    "reader_value": 0.15
+  },
+  "shadow": true,
+  "active_intercept": false,
+  "migrate_note": "换主题只需复制本文件并修改 junk_categories/quality_signals/weights；通用层 scripts/score.py 不变。"
+}

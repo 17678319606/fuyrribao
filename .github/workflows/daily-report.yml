@@ -180,11 +180,16 @@ jobs:
               raise SystemExit(0)
           status = d.get("status", {})
           failed = [k for k, v in status.items() if not v.get("ok")]
-          if not failed:
+          total_cand = d.get("total_candidates", -1)
+          alerts = []
+          if failed:
+              alerts.append("有 %d 个内容源抓取失败：%s" % (len(failed), ", ".join(failed)))
+          if total_cand == 0:
+              alerts.append("今日候选信号为 0（所有源可能均失败或暂无可抓取内容），日报可能为空")
+          if not alerts:
               print("✅ 所有内容源抓取正常")
               raise SystemExit(0)
-          msg = "【副业日报】今日有 %d 个内容源抓取失败：%s\n请检查源可用性（不影响已成功源的日报生成）。" % (
-              len(failed), ", ".join(failed))
+          msg = "【副业日报】" + "；".join(alerts) + "\n请检查源可用性（不影响已成功源的日报生成）。"
           payload = json.dumps({"msgtype": "text", "text": {"content": msg}}).encode("utf-8")
           url = "${{ secrets.WXWORK_WEBHOOK || '<WXWORK_WEBHOOK_PLACEHOLDER>' }}"
           try:

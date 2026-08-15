@@ -1,0 +1,93 @@
+# 自主内容源发现流水线（扩源 · 隔离于日常生成）
+# ─────────────────────────────────────────────────────────────────────
+# 目标：按 docs/source-standard.md 的五维标准，自动发现并引入高相关内容源，
+#       让日报在"零人工运维"下长期保持新鲜度（长期真自动化）。
+# 触发：
+#   1. 定时：每周一 02:00 北京时间（UTC 周日 18:00）例行发现；
+#   2. 手动：workflow_dispatch（可勾选 dry_run 仅评估不写入）。
+# 成本：GitHub Search API（自带额度）+ 璇玑 LLM 打分（用户自有网关，极低）；
+#       周级频率，远在免费额度内。LLM 不可用自动退回启发式。
+# 安全：只改 scripts/sources.json 并留痕日志；提交用内置 GITHUB_TOKEN。
+
+name: 内容源自主发现
+
+on:
+  schedule:
+    - cron: '0 18 * * 0'   # 北京时间 周一 02:00（UTC 周日 18:00）
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '仅评估不写入 sources.json（仍输出日志）'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+  ai_api_key: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  AI_SIDEHUSTLE_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
+
+      - name: 运行自主发现
+        id: discover
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
+          python scripts/discover_sources.py $ARGS
+          echo "changes=$(grep -o 'DISCOVER_CHANGES=[0-9]*' <(python scripts/discover_sources.py $ARGS) | cut -d= -f2)" >> "$GITHUB_OUTPUT" || true
+
+      - name: 提交新内容源（若有）
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scripts/sources.json
+          git diff --cached --quiet || git commit -m "source: auto-discover 新增内容源 ($(TZ=Asia/Shanghai date +%F))"
+          for j in 1 2 3; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
+              echo "✅ 新内容源已提交"; break
+            fi
+            echo "push 第 $j/3 次失败，5s 后重试"; sleep 5
+          done
+
+      - name: 发现日志（企业微信通知，可选）
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, json
+          p = "state/source_discovery_log.json"
+          if not os.path.exists(p):
+              raise SystemExit(0)
+          try:
+              d = json.load(open(p, encoding="utf-8"))
+          except Exception:
+              raise SystemExit(0)
+          print("发现候选 %d，引入 %d，待审 %d，拒绝 %d" % (
+              d.get("candidates", 0), len(d.get("accepted", [])),
+              len(d.get("review", [])), len(d.get("rejected", []))))
+          for a in d.get("accepted", []):
+              print(" + 引入:", a.get("name"), a.get("scores", {}).get("composite"))
+          for r in d.get("review", []):
+              print(" ? 待审:", r.get("name"), r.get("scores", {}).get("composite"))
+          PY

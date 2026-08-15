@@ -22,7 +22,10 @@
         script: |
           set -e
           pip install --quiet requests beautifulsoup4 feedparser lxml pysocks pillow
-          # 单入口编排：抓取→生成→发WP（公众号由 WP 插件处理）→通知（通知必定执行，失败也报）
+          # 单一发布方治理：CNB 仅做"生成+诊断"，不发布到 WP（避免与 GitHub Actions 同发一个 WP 造成重复/覆盖）。
+          # 发布由 GitHub Actions 主力流水线独占。如需切回 CNB 发布，删掉下面这行 export 即可。
+          export FUYR_DISABLE_PUBLISH=1
+          # 单入口编排：抓取→生成（发布被上方开关跳过）→通知（通知必定执行，失败也报）
           python scripts/run_daily.py
 
 main:
