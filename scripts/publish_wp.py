@@ -137,6 +137,7 @@ def render_item(it, modcls):
         it = {"title": str(it)[:200]}
     title = _esc(it.get("title", ""))
     src_name = _esc(it.get("source_name", ""))
+    src_url = it.get("source_url", "")
 
     rows = ""
     for key, label in CANVAS_FIELDS:
@@ -168,12 +169,25 @@ def render_item(it, modcls):
                 f'</div>\n'
             )
 
+    # 来源链接：有 source_url 则渲染为可点击链接；无则降级为纯文本提示
+    if src_url:
+        src_html = (
+            f'<span style="{S_SRC_PILL}">{src_name}</span> '
+            f'<a href="{_esc(src_url)}" target="_blank" rel="noopener" data-fuyr-src="1" '
+            f'style="font-size:12px;color:#2f6b5e;font-weight:600;text-decoration:none;">'
+            f'阅读原文 ↗</a>'
+        )
+    else:
+        src_html = (
+            f'<span style="{S_SRC_PILL}">{src_name}</span>'
+            f'<span style="{S_READ_HINT}">来源文字链 · 阅读原文请返回对应平台</span>'
+        )
+
     return (
         f'<article style="{S_CARD}">\n'
         f'<h3 style="{S_IT_TITLE}">{title}</h3>\n'
         f'<div style="{S_IT_META}">'
-        f'<span style="{S_SRC_PILL}">{src_name}</span>'
-        f'<span style="{S_READ_HINT}">来源文字链 · 阅读原文请返回对应平台</span>'
+        f'{src_html}'
         f'</div>\n'
         f'{rows}'
         f'</article>'
@@ -181,15 +195,20 @@ def render_item(it, modcls):
 
 
 def _strip_links(html):
-    """后处理：把所有 <a href="...">text</a> 转换为不可点击的 <span class="text-link">text</span>，
-    并抹掉任何裸 http/https URL，确保正文不出现可点击链接与可见网址。
+    """后处理：把 AI 生成的无关 <a> 标签转为纯文本（保留模板注入的来源链接）。
+
+    保留规则：带 data-fuyr-src 属性的 <a> 为模板注入的「阅读原文」链接，不删除。
+    其余所有 <a>（AI 输出中可能夹带的推广/参考链接）全部脱链为文本。
     """
     import re
-    # 1) 去除 <a> 标签的 href/target/rel 属性，保留文本
-    html = re.sub(r'<a\b[^>]*?href="[^"]*"[^>]*?>(.*?)</a>',
-                  r'<span style="%s">\1</span>' % S_TEXT_LINK, html, flags=re.S | re.I)
-    html = re.sub(r'<a\b[^>]*?>(.*?)</a>', r'<span style="%s">\1</span>' % S_TEXT_LINK,
-                  html, flags=re.S | re.I)
+    # 1) 保留带 data-fuyr-src 的来源链接（模板注入），其余 <a> 脱链
+    html = re.sub(
+        r'<a\b(?![^>]*data-fuyr-src)[^>]*?href="[^"]*"[^>]*?>(.*?)</a>',
+        r'<span style="%s">\1</span>' % S_TEXT_LINK, html, flags=re.S | re.I)
+    html = re.sub(
+        r'<a\b(?![^>]*data-fuyr-src)[^>]*?>(.*?)</a>',
+        r'<span style="%s">\1</span>' % S_TEXT_LINK,
+        html, flags=re.S | re.I)
     # 2) 把可见的裸 URL 替换为空（通常只剩括号或空白）
     html = re.sub(r'https?://[^\s<>"\')]+', '', html, flags=re.I)
     # 3) 清理可能留下的空括号、多余空白
