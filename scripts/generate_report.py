@@ -425,12 +425,19 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
 
     # 展开为 (url, key, model) 端点列表：首选 base_urls（共用 api_key/model）
     # + 可选兜底（AI_FALLBACK_URL/KEY/MODEL，默认国内网关，独立 key/model）。
-    # 首选即 Google Gemini OpenAI 兼容端点（海外 Runner 直连，规避跨境瓶颈）。
+    # 端点装配：默认首选传入的 base_urls（Gemini 等），可选 AI_FALLBACK_URL 作兜底。
+    # 低摩擦增强：若检测到 DEEPSEEK_API_KEY，则把 DeepSeek（OpenAI 兼容、国内稳定、
+    # 用户长期偏好）作为【首选】，原 base_urls 降级为兜底——避免在已限流(429)的 Gemini
+    # 上反复重试浪费时间。只需在密钥仓库 env.yml 加一行 DEEPSEEK_API_KEY=<你的key> 即生效。
     endpoints = []
     seen = set()
     fb_url = os.environ.get("AI_FALLBACK_URL", "").strip().rstrip("/")
     fb_key = os.environ.get("AI_FALLBACK_KEY", "").strip()
     fb_model = os.environ.get("AI_FALLBACK_MODEL", "").strip() or model
+    ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    ds_model = os.environ.get("DEEPSEEK_MODEL", "").strip() or "deepseek-chat"
+    ds_preferred = bool(ds_key)
+
     for u in base_urls:
         u = (u or "").strip().rstrip("/")
         if u and u not in seen:
@@ -438,6 +445,10 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
             endpoints.append((u, api_key, model))
     if fb_url and fb_url not in seen:
         endpoints.append((fb_url, fb_key, fb_model))
+    if ds_preferred and "https://api.deepseek.com/v1" not in seen:
+        # DeepSeek 插到最前作为首选；原有端点整体退为兜底。
+        endpoints.insert(0, ("https://api.deepseek.com/v1", ds_key, ds_model))
+        LOG.info("检测到 DEEPSEEK_API_KEY，已将 DeepSeek 设为首选端点，原 base_urls 降级为兜底")
 
     for (base_url, api_key, model) in endpoints:
         # Gemini 原生 API（适配 AI Studio AQ. Auth key）：直接调用，不走 OpenAI 兼容层/代理池
