@@ -13,7 +13,7 @@
   - 当日末次触发且成功 → 汇总一条日报摘要；
   - 晨间成功 → 不发。
 
-退出码：始终 0（通知已覆盖结果；构建红/绿由 CNB 日志与机器人共同体现）。
+退出码：关键步骤（generate/wp/wechat）任一失败 → 非 0（CNB 构建标红）；通知已在 finally 中发出。
 """
 import os
 import sys
@@ -37,9 +37,14 @@ BJ = datetime.timezone(datetime.timedelta(hours=8))
 
 
 def _run(script):
-    p = subprocess.run([sys.executable, os.path.join(HERE, script)],
-                       capture_output=True, text=True)
-    out = (p.stdout + "\n" + p.stderr).strip()
+    # 用 -u 关闭子进程缓冲，并把子进程 stdout/stderr 实时回显到主进程 stdout，
+    # 使 CNB 日志能完整捕获各步骤真实输出（之前 capture_output 把输出吞掉，导致"假成功"）。
+    p = subprocess.run([sys.executable, "-u", os.path.join(HERE, script)],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    out = (p.stdout or "").strip()
+    print("\n===== %s (rc=%d) =====" % (script, p.returncode), flush=True)
+    print(out, flush=True)
+    print("===== /%s =====" % script, flush=True)
     return p.returncode == 0, out
 
 
@@ -105,7 +110,9 @@ def main():
         except Exception:
             pass
 
-    sys.exit(0)
+    # 关键步骤（generate/wp/wechat）任一失败 → 返回非 0，让 CNB 构建标红，
+    # 避免"假成功"。通知已在 finally 中发出，红/绿由构建状态与机器人共同体现。
+    sys.exit(0 if status.get("ok", True) else 1)
 
 
 if __name__ == "__main__":
