@@ -16,3 +16,5 @@ state/source_status.json
 state/last_posted.json
 state/daily_report_*.json
 state/.gen_changed
+# 含真实密钥的本地交付模板，禁止入库
+env.fuyrribao.clean.yml
