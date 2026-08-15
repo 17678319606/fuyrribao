@@ -857,55 +857,72 @@ def _validate(report):
     return True
 
 
-# —— 空心条目检测模式（标题/信号层面的硬排除）——
-_HOLLOW_TITLE_PATTERNS = [
-    r"不敢结婚", r"官宣.*创业", r"离职.*创业", r"入职", r"融资.*亿",
-    r"年薪.*留不住", r"跳槽", r"加盟", r"出任", r"升任",
-    r"发布.*新品", r"发布.*版本", r"获得.*投资", r"完成.*融资",
-    r"估值.*亿", r" IPO ", r"上市", r"并购", r"收购",
+# —— 空心条目检测 ——
+import re
+
+# 硬排除模式：名人动态 / 人事变动 / 行业八卦 / 纯融资快讯 —— 命中即空心，无任何 MVP 例外。
+# （AI 为了绕过骨架拦截常给这类条目填凑数 MVP，因此必须无条件剔除。）
+_HARD_EXCLUDE_PATTERNS = [
+    r"不敢结婚", r"官宣.*创业", r"离职.*创业", r"入职.*创业", r"跳槽.*创业",
+    r"离开.*创业", r"加盟.*创业", r"年薪.*留不住", r"离职.*Meta", r"离职.*OpenAI",
+    r"离职.*Google", r"离职.*字节", r"离职.*阿里", r"离职.*腾讯", r"出任.*CEO",
+    r"升任", r"融资.*亿", r"获得.*投资", r"完成.*融资", r"估值.*亿",
+    r"\bIPO\b", r"上市.*募资", r"并购", r"收购.*亿", r"官宣.*公司",
+    r"创业公司.*获", r"前.*核心.*离职",
 ]
-_HOLLOW_FLUFF = ["N/A", "n/a", "暂无", "待定", "详见原文", "无", "—", "-", "／",
-                  "反映.*发展", "体现.*趋势", "潜力巨大", "值得关注", "具有重要意义",
-                  "不可忽视", "具有深远影响", "涌动", "频繁"]
+
+# 套话库：纯定性空话，无 actionable value
+_HOLLOW_FLUFF_LITERAL = ["N/A", "n/a", "暂无", "待定", "详见原文", "无", "—", "-", "／",
+                         "潜力巨大", "值得关注", "具有重要意义", "不可忽视",
+                         "具有深远影响", "涌动", "频繁", "关注行业动态",
+                         "可通过自媒体", "分享观点", "获取机会", "保持关注",
+                         "拥抱变化", "抓住机遇", "顺势而为"]
+_HOLLOW_FLUFF_REGEX = [r"反映.*发展", r"体现.*趋势", r"展示.*潜力", r"说明.*重要性",
+                       r"随着.*推进", r"在.*背景下"]
+
+
+def _has_fluff(text):
+    """判断一段文字是否主要由套话构成（无具体 actionable 信息）。"""
+    if not text:
+        return True
+    tl = text.lower()
+    for f in _HOLLOW_FLUFF_LITERAL:
+        if f.lower() in tl:
+            return True
+    for f in _HOLLOW_FLUFF_REGEX:
+        if re.search(f, text):
+            return True
+    return False
 
 
 def _is_hollow_item(item):
     """检测一条 item 是否为空心内容（对副业读者零 actionable value）。
     返回 (is_hollow: bool, reason: str)。
     """
-    t = (item.get("title") or "") + (item.get("signal") or "")
+    t = (item.get("title") or "") + " " + (item.get("signal") or "")
     mvp = (item.get("how_to_mvp") or "").strip()
     acq = (item.get("acquisition_channel") or "").strip()
     mon = (item.get("monetization") or "").strip()
     val = (item.get("value_proposition") or "").strip()
     per = (item.get("perspective") or "").strip()
 
-    # 1) 标题/信号命中名人动态、人事变动、纯融资等硬排除模式
-    import re
-    for pat in _HOLLOW_TITLE_PATTERNS:
+    # 1) 硬排除：名人动态 / 人事变动 / 行业八卦 / 纯融资快讯 —— 命中即空心，无例外
+    for pat in _HARD_EXCLUDE_PATTERNS:
         if re.search(pat, t):
-            # 例外：如果 MVP 或获客渠道有具体内容（≥15字且不是套话），则放行
-            has_actionable = (
-                len(mvp) >= 15 and not any(f in mvp for f in _HOLLOW_FLUFF)
-            ) or (
-                len(acq) >= 15 and not any(f in acq for f in _HOLLOW_FLUFF)
-            )
-            if not has_actionable:
-                return True, f"命中排除模式「{pat}」且无可操作内容"
+            return True, f"命中硬排除模式「{pat}」(名人动态/人事变动/行业八卦/纯融资)"
 
-    # 2) 核心行动字段全空或全是套话 → 空心
-    action_fields = [mvp, acq, mon]
-    non_empty = [f for f in action_fields if len(f.strip()) >= 10]
-    if len(non_empty) == 0:
-        # 观点心法模块可以没有 MVP/获客，但至少要有实质性的 perspective 或 value_proposition
-        is_views = (len(per) >= 20 or len(val) >= 20)
+    # 2) 核心行动字段全空或全为套话 → 空心
+    #    实质性 = 长度≥10 且不含套话；观点心法模块允许用 perspective/value_proposition 替代
+    substantial = [f for f in (mvp, acq, mon) if len(f.strip()) >= 10 and not _has_fluff(f)]
+    if len(substantial) == 0:
+        is_views = (len(per) >= 20 and not _has_fluff(per)) or (len(val) >= 20 and not _has_fluff(val))
         if not is_views:
-            return True, "核心行动字段(MVP/获客/变现)全空，且观点/价值主张也不足"
+            return True, "核心行动字段(MVP/获客/变现)全空或全是套话，且观点/价值主张也不足"
 
-    # 3) 所有字段都是正确的废话（≤30字且命中套话库）
+    # 3) 所有字段过短且全为套话
     all_text = " ".join([mvp, acq, mon, val, per])
-    if len(all_text) > 0 and len(all_text) < 80:
-        fluff_count = sum(1 for f in _HOLLOW_FLUFF if f.lower() in all_text.lower())
+    if 0 < len(all_text) < 80:
+        fluff_count = sum(1 for f in _HOLLOW_FLUFF_LITERAL if f.lower() in all_text.lower())
         if fluff_count >= 2:
             return True, f"所有字段过短({len(all_text)}字)且含{fluff_count}条套话"
 
