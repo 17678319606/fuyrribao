@@ -913,8 +913,10 @@ def main():
     LOG.info("开始生成 %s 日报", today)
 
     # AI 配置与候选端点
+    # 兼容两种命名：GEMINI_API_KEY（直观）/ AI_API_KEY（历史）；AI_SIDEHUSTLE_API_KEY / AI_FALLBACK_KEY
     base_urls = _parse_base_urls()
-    api_key = os.environ.get("AI_API_KEY", "")
+    api_key = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("AI_API_KEY", "")
+    fallback_key = os.environ.get("AI_SIDEHUSTLE_API_KEY", "") or os.environ.get("AI_FALLBACK_KEY", "")
     model = os.environ.get("AI_MODEL", "gemini-flash-latest")
     if _force_non_stream():
         LOG.info("强制非流式模式：所有 AI 调用使用整包返回（可在 Secret AI_FORCE_NON_STREAM=0 关闭）")
@@ -966,8 +968,8 @@ def main():
         LOG.info("无新增信号，但检测到渲染器版本更新，仅用已累积 %d 条内容重渲染。", acc_total)
         report = accumulated
     else:
-        if not api_key and not os.environ.get("AI_FALLBACK_KEY", "").strip():
-            LOG.error("缺少任何 AI key（未配置 AI_API_KEY / AI_FALLBACK_KEY），无法生成。")
+        if not api_key and not fallback_key:
+            LOG.error("缺少任何 AI key（未配置 GEMINI_API_KEY/AI_API_KEY 或 AI_SIDEHUSTLE_API_KEY/AI_FALLBACK_KEY），无法生成。")
             raise SystemExit("missing AI key")
 
         # 候选编排（仅对新信号）：候选过多 → 分批筛选；中小批量 → 均衡采样；最后统一上限。
