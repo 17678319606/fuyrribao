@@ -5,23 +5,16 @@
 #             19:00（末次触发，WP 增量 + 公众号推送当日最全版 + 汇总通知）
 # AI 只跑一次（增量累积：仅新信号调 AI）；WP 每次增量更新同日文章；
 #   公众号仅在末次触发(北京≥19点)发一次（WX_FINAL_HOUR 默认 19）；失败也发企业微信告警。
-# 密钥：全部来自 CNB 仓库「设置 → 环境变量」，绝不硬编码。需用户填入：
-#   - AI：GEMINI_API_KEY（或 AI_API_KEY）、AI_SIDEHUSTLE_API_KEY（兜底网关）
-#   - WP：WP_APP_PASSWORD（WP_URL/WP_USER/WP_CATEGORY_NAME 见下文默认，可按需改）
-#   - 公众号（可选）：WX_ACCOUNTS（JSON 多账号，推荐）或 WX_APPID+WX_APPSECRET+WX_PUBLISH_MODE；
-#            WX_PUBLISH_MODE / 每账号 mode：mass(认证订阅号群发) / freepublish(发布不推) / draft(草稿)
-#            WX_FINAL_HOUR(默认19) / WX_PUSH_ALL(true 全账号推送) / WX_AUTHOR
-#   - 通知（可选）：WXWORK_WEBHOOK（企业微信机器人 Webhook，失败告警+末次汇总）
+# 密钥：从秘钥仓库 jinbufenzi/fuyrribao-secrets/env.yml 注入（imports），绝不硬编码。
+#   修改密钥只需在秘钥仓库网页编辑 env.yml，无需改代码或重新推送。
 # 封面：「副业日报 + 日期」由 generate_cover 动态生成（依赖 fonts-noto-cjk 免费字体）。
 # 注意：不监听 push 事件，避免心跳回写再次触发流水线形成死循环。
 # 触发方式：crontab ×2（系统定时）/ web_trigger（网页运行）/ api_trigger（Open API build/start）。
 
 .cnb-job: &cnb-job
-  # 密钥从秘钥仓库注入（jinbufenzi/fuyrribao-secrets/env.yml）
-  # 修改密钥只需在秘钥仓库网页编辑 env.yml，无需改代码或重新推送
-  imports:
-    - https://cnb.cool/jinbufenzi/fuyrribao-secrets/-/blob/main/env.yml
-  - docker:
+  - imports:
+      - https://cnb.cool/jinbufenzi/fuyrribao-secrets/-/blob/main/env.yml
+    docker:
       image: python:3.11
     runner:
       cpus: 1
