@@ -318,3 +318,95 @@ def heuristic_relevance(name, url=""):
     text = (str(name) + " " + str(url)).lower()
     hits = sum(1 for kw in SOURCE_RELEVANCE_KEYWORDS if kw.lower() in text)
     return min(1.0, 0.4 + 0.12 * hits)
+
+import threading
+import time
+
+# ─────────────────────────────────────────────────────────────────────
+# 统一 AI 限速器（Gemini 免费层配额保护，已固化进源码）
+# ─────────────────────────────────────────────────────────────────────
+AI_RATE_STATE_FILE = os.path.join(STATE_DIR, "ai_rate_state.json")
+
+
+def is_gemini_host(url):
+    """判断端点是否为 Google Gemini 原生 API（决定是否计入免费层配额预算）。"""
+    low = (url or "").lower()
+    return "generativelanguage.googleapis.com" in low and "/openai/" not in low
+
+
+class AIRateLimiter:
+    def __init__(self):
+        self.rpm = float(os.environ.get("GEMINI_RPM", "10"))      # 滑窗上限，留 33% 余量(<15)
+        self.rpd = float(os.environ.get("GEMINI_RPD", "800"))     # 每日预算，留余量(<1500)
+        self.max_concurrency = int(os.environ.get("GEMINI_MAX_CONCURRENCY", "1"))
+        self._lock = threading.Lock()
+        self._sem = threading.Semaphore(self.max_concurrency)
+        self._window = []
+        self._day = None
+        self._used = 0
+        self._loaded = False
+        self._load()
+
+    def _load(self):
+        try:
+            d = load_json(AI_RATE_STATE_FILE, {})
+            self._day = d.get("day", date_str())
+            self._used = float(d.get("used", 0))
+        except Exception:
+            self._day = date_str()
+            self._used = 0
+        self._rollover_day()
+        self._loaded = True
+
+    def _save(self):
+        try:
+            obj = {"day": self._day, "used": self._used,
+                   "updated": datetime.datetime.now().isoformat()}
+            save_json(AI_RATE_STATE_FILE, obj)
+        except Exception:
+            pass
+
+    def _rollover_day(self):
+        today = date_str()
+        if self._day != today:
+            self._day = today
+            self._used = 0
+            self._window = []
+            self._save()
+
+    def _admit_rpm(self):
+        min_gap = 60.0 / max(1.0, self.rpm)
+        now = time.time()
+        with self._lock:
+            self._window = [t for t in self._window if now - t < 60.0]
+            if self._window:
+                elapsed = now - self._window[0]
+                need = min_gap * len(self._window)
+                if elapsed < need:
+                    return need - elapsed + 0.2
+        return 0.0
+
+    def throttle(self, is_gemini=True):
+        with self._sem:
+            self._rollover_day()
+            if is_gemini:
+                if self._used >= self.rpd:
+                    raise RuntimeError(
+                        "Gemini 免费层每日预算已用尽（%d/%d），中止本次原生调用避免撞墙；"
+                        "请明日再跑或升级付费层。" % (int(self._used), int(self.rpd)))
+                wait = self._admit_rpm()
+                if wait > 0:
+                    logging.getLogger("fuyr.ai_limiter").warning(
+                        "AI 限速（RPM 滑窗）：补眠 %.1fs 以避免撞 Gemini 15 RPM 墙", wait)
+                    time.sleep(wait)
+                with self._lock:
+                    self._window.append(time.time())
+                    self._used += 1
+                    self._save()
+
+    def snapshot(self):
+        self._rollover_day()
+        return {"day": self._day, "used": int(self._used), "rpm": self.rpm, "rpd": self.rpd}
+
+
+ai_limiter = AIRateLimiter()
