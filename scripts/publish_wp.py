@@ -302,8 +302,8 @@ def _short(url, n=64):
     return url if len(url) <= n else url[:n] + "…"
 
 
-def _wp_call(session, method, url, auth, json_body=None, timeout=90, retries=2, backoff=5):
-    """WP REST 调用包装：偶发超时/连接抖动/429/5xx 自动重试，退避线性增长。
+def _wp_call(session, method, url, auth, json_body=None, timeout=90, retries=3, backoff=8):
+    """WP REST 调用包装：偶发超时/连接抖动/429/5xx/524(网关超时) 自动重试，退避线性增长。
     慢文章发布（大 HTML）给 90s 超时；绝不因瞬时抖动导致当天发布失败。"""
     import requests
     last_err = None
@@ -313,7 +313,7 @@ def _wp_call(session, method, url, auth, json_body=None, timeout=90, retries=2, 
             if json_body is not None:
                 kw["json"] = json_body
             r = session.request(method, url, **kw)
-            if r.status_code in (429, 500, 502, 503, 504):
+            if r.status_code in (429, 500, 502, 503, 504, 524):
                 wait = backoff * i
                 LOG.warning("WP %s %s 返回 %s，%ds 后重试", method, _short(url), r.status_code, wait)
                 time.sleep(wait)
@@ -328,6 +328,34 @@ def _wp_call(session, method, url, auth, json_body=None, timeout=90, retries=2, 
             if i < retries:
                 time.sleep(wait)
     raise last_err or RuntimeError("wp call failed: " + url)
+
+
+# 自动发布的日报默认 noindex，避免与站点原创内容争夺收录（SEO 内耗）。
+# 覆盖主流 SEO 插件键位；若站点未启用对应插件，REST meta 会返回 400，
+# _safe_publish 会自动去掉 meta 重试，绝不阻断发布。
+NOINDEX_META = {
+    "_yoast_wpseo_meta-robots-noindex": 1,
+    "aioseo_noindex": True,
+    "rank_math_robots": ["noindex"],
+}
+
+
+def _safe_publish(session, base, auth, payload, existing_id=None):
+    """发布/更新文章；若 noindex meta 未被站点注册(400)，去掉 meta 重试一次，保证发布不中断。"""
+    import requests
+    url = f"{base}/wp-json/wp/v2/posts" + (f"/{existing_id}" if existing_id else "")
+    try:
+        r = _wp_call(session, "POST", url, auth, json_body=payload, timeout=90)
+        r.raise_for_status()
+        return r
+    except requests.exceptions.HTTPError as e:
+        if payload.get("meta") and getattr(e.response, "status_code", None) == 400:
+            LOG.warning("noindex meta 未注册(400)，去掉 meta 重试发布")
+            payload2 = {k: v for k, v in payload.items() if k != "meta"}
+            r = _wp_call(session, "POST", url, auth, json_body=payload2, timeout=90)
+            r.raise_for_status()
+            return r
+        raise
 
 
 def get_category_id(session, base, auth, name):
@@ -442,8 +470,8 @@ def main():
         payload = {"title": title, "content": content, "status": "publish"}
         if cat_id:
             payload["categories"] = [cat_id]
-        r = _wp_call(session, "POST", f"{base}/wp-json/wp/v2/posts/{existing_id}",
-                     auth, json_body=payload, timeout=90)
+        payload["meta"] = dict(NOINDEX_META)
+        r = _safe_publish(session, base, auth, payload, existing_id=existing_id)
         r.raise_for_status()
         link = r.json().get("link", "")
         LOG.info("已更新: %s", link)
@@ -460,8 +488,8 @@ def main():
     payload = {"title": title, "content": content, "status": "publish"}
     if cat_id:
         payload["categories"] = [cat_id]
-    r = _wp_call(session, "POST", base + "/wp-json/wp/v2/posts",
-                 auth, json_body=payload, timeout=90)
+    payload["meta"] = dict(NOINDEX_META)
+    r = _safe_publish(session, base, auth, payload)
     r.raise_for_status()
     link = r.json().get("link", "")
     LOG.info("已发布: %s", link)

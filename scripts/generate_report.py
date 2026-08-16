@@ -45,6 +45,7 @@ DATA_DIR = C.DATA_DIR
 
 RETRY_PER_ENDPOINT = 2      # 每端点重试：收敛防时间爆炸；冗余靠多镜像+DoH+代理池提供
 BACKOFF_BASE = 8            # 退避基数 8s：网关高延迟，更长退避让其喘气（用户允许稍晚生成）
+MAX_BACKOFF = 60             # 退避封顶 60s：防多端点 524 重试叠加把单轮拖到数百秒（失控）
 REQ_TIMEOUT = (20, 300)     # 默认读超时 300s；可被环境变量 AI_REQUEST_TIMEOUT 覆盖
 GEN_RETRIES = 4             # 外层生成重试 4 次：用户要求必须 AI 输出、可稍晚，多给几次机会
 STREAM_MAX_SECONDS = 900    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
@@ -198,9 +199,9 @@ def _candidate_endpoints():
 
 
 def _is_retryable_http(status):
-    """连接层失败(status=0，无响应体)/限流 429 / 5xx 服务端错误可重试；
-    4xx 其他（鉴权/参数错误）直接放弃。"""
-    return status == 0 or status == 429 or (500 <= status < 600)
+    """连接层失败(status=0，无响应体)/限流 429 / 5xx 服务端错误 / 524 网关超时均可重试；
+    4xx 其他（鉴权/参数错误）直接放弃。524 属 EdgeOne 源站响应超时，归为可重试。"""
+    return status == 0 or status == 429 or status == 524 or (500 <= status < 600)
 
 
 def _retry_after_seconds(resp):
@@ -661,6 +662,7 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     if _is_retryable_http(status):
                         # 尊重服务端 Retry-After（限流冷却），否则用指数退避
                         wait = _retry_after_seconds(e.response) or (BACKOFF_BASE * (2 ** (attempt - 1)))
+                        wait = min(wait, MAX_BACKOFF)
                         # EdgeOne 源站超时(524)/5xx：后端可能过载，给更长冷却让其恢复，
                         # 避免 8s 内反复打满已过载的源站（网关抖动自愈的关键）。
                         if 500 <= status < 600:
@@ -870,8 +872,18 @@ def _validate(report):
                 LOG.warning("模块 %s 第 %d 条为字符串（非对象），已清洗为标题卡片", key, idx)
                 cleaned.append({"title": it[:200], "source_name": "",
                                 "source_url": "", "signal": ""})
-        else:
-            LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
+            elif hasattr(it, "items") and not isinstance(it, (str, bytes)):
+                # AI/JSON 解码偶发返回 Mapping 子类（非严格 dict），原逻辑 isinstance(it,dict)
+                # 为 False -> 在 for…else 错挂下被静默丢弃，内容丢失。此处强制转 dict 并清洗，保住内容。
+                LOG.warning("模块 %s 第 %d 条为 Mapping 子类（非严格 dict），已转 dict 保内容", key, idx)
+                d = dict(it)
+                d.setdefault("title", "")
+                d.setdefault("source_name", "")
+                d.setdefault("source_url", "")
+                d.setdefault("signal", "")
+                cleaned.append(d)
+            else:
+                LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
         if len(cleaned) > C.MAX_ITEMS_PER_MODULE:
             LOG.info("模块 %s 条目 %d 超出每模块上限 %d，截断至上限",
                      key, len(cleaned), C.MAX_ITEMS_PER_MODULE)

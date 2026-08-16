@@ -39,6 +39,7 @@ LOG = C.get_logger()
 ACCEPT_COMPOSITE = 16          # 综合分 ≥ 16/25（略放宽，纳入高质量小众源）
 ACCEPT_MIN_DIM = 3             # 每个维度 ≥ 3（防单维劣质源混入）
 REVIEW_COMPOSITE = 12          # 12–15 仅记录待审（扩待审网，人工可捞）
+RELEVANCE_MIN_ACCEPT = 4        # 自动准入的相关性硬门槛：杜绝弱相关/无关源混入（质量 > 数量）
 
 # 每轮校验上限：发现 workflow 硬限 30 分钟，候选常驻池（OPML+仓库）可达数百~上千，
 # 必须限制每轮实拉取校验条数，避免超时；达标写入受 SOURCE_ACTIVE_CAP 约束，
@@ -407,15 +408,19 @@ def score_candidate(cfg, existing_hosts, existing_names):
             "scarcity": scarcity, "authority": authority}
     reason = "启发式"
     # L1 LLM 精评（覆盖 relevance/authority）
+    # 主题硬闸门：LLM 仅可在 L0 已有≥1 个主题关键词命中时上调相关性，
+    # 避免 LLM 把"零关键词的无关地域新闻"误评为高相关而混入（本次回归根因）。
     llm = _call_llm_score(cfg.get("url", ""), name, titles)
     if llm:
-        dims["relevance"] = llm.get("relevance", relevance)
+        if hits > 0:
+            dims["relevance"] = llm.get("relevance", relevance)
         dims["authority"] = llm.get("authority", authority)
         reason = llm.get("reason", "LLM")
     composite = sum(dims.values())
     dims["composite"] = composite
     min_dim = min(dims[k] for k in ("relevance", "stability", "format", "scarcity", "authority"))
-    if min_dim >= ACCEPT_MIN_DIM and composite >= ACCEPT_COMPOSITE:
+    if (min_dim >= ACCEPT_MIN_DIM and composite >= ACCEPT_COMPOSITE
+            and dims["relevance"] >= RELEVANCE_MIN_ACCEPT):
         return dims, True, "accepted", reason
     if composite >= REVIEW_COMPOSITE:
         return dims, False, "review", reason
