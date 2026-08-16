@@ -339,6 +339,13 @@ def _call_ai(system, user):
                 last = e
                 continue
         # OpenAI 兼容路径（璇玑）：重试连接/限流错误
+        # DoH 兜底：钉国内网关 IP（与日报对齐，避免海外 Runner 解析不到璇玑而
+        # NameResolutionError）；每个 CI step 独立进程，周报必须自己装。
+        try:
+            from urllib.parse import urlparse
+            C.install_dns_patch(urlparse(base).hostname or "")
+        except Exception as _e:
+            LOG.warning("安装 DoH DNS 兜底失败（跳过）: %s", _e)
         url = base + "/chat/completions"
         auth = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
         body = {
@@ -745,6 +752,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
