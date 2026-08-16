@@ -81,6 +81,9 @@ jobs:
       - name: 安装依赖
         run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
 
+      - name: 注入 AI 限速器（免费 Gemini 配额保护，防 429）
+        run: python scripts/patches/apply_rate_limit.py
+
       - name: 恢复状态缓存（seen.json / CID 快照 / 当日累积日报，走缓存而非提交 git，避免仓库膨胀）
         id: statecache
         uses: actions/cache/restore@v4
