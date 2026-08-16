@@ -49,7 +49,7 @@ env:
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   # —— AI 主用 Gemini 原生 API（AI Studio AQ. 密钥，仅支持原生端点 generativelanguage.googleapis.com/v1beta）——
   AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
-  AI_MODEL: gemini-2.5-flash
+  AI_MODEL: gemini-flash-latest
   # 主用 key：AI_BASE_URL 指向 Gemini 原生 → 代码自动回落 GEMINI_API_KEY（generate_report.py 1347-1351）
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   # —— 兜底：璇玑国内网关（主用不可达/限流/额度耗尽时自动回退，不宕机）——
