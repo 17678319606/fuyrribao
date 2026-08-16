@@ -403,6 +403,11 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
                 line = raw_line.decode("utf-8", "replace").strip()
             if not line:
                 continue
+            # 兼容 SSE（data: 前缀）与纯 JSON Lines 两种流式格式
+            if line.startswith("data:"):
+                line = line[len("data:"):].strip()
+            if not line or line == "[DONE]":
+                continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
