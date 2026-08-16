@@ -1,20 +1,24 @@
-# 副业日报每日生成流水线（GitHub 主力版 v4）
+# 副业日报每日生成流水线（GitHub 主力版 v4 · 唯一发布方）
 # ─────────────────────────────────────────────────────────────────────
 # 触发方式：
-#   1. 定时发布：已由 CNB（.cnb.yml，北京时间 06:00 晨间 + 19:00 晚间）独家承担，避免双发（P0）
-#   2. 手动触发：workflow_dispatch（支持 force 强制重渲染 / clean 清洁模式）
-#   3. 应急 / 重渲染专用，日常自动化不再经本 workflow 的 schedule
+#   1. 定时发布：由宝塔服务器 trigger_daily.sh 每日 19:00（北京时间）经 workflow_dispatch 触发；
+#      这是日常自动化的唯一发布入口（单发布方治理，杜绝双发）。
+#   2. 手动触发：workflow_dispatch（支持 force 强制重渲染 / clean 清洁模式）。
+#   3. 应急 / 重渲染专用。
+#
+# 重要：CNB（.cnb.yml，北京时间 06:00 / 19:00）仅做"生成 + 诊断"，
+#       已设 FUYR_DISABLE_PUBLISH=1 跳过 WordPress 发布，不会与本职发布方冲突。
+#       GitHub Actions 才是唯一的真实发布方（详见仓库根 trigger_daily.sh）。
 #
 # AI 后端：璇玑国内网关 ai.jinbufenzi.com（主用，已验证可出文章）
-# 发布目标：WordPress + 公众号（freepublish）
+# 发布目标：WordPress + 公众号（freepublish，由 WP 插件在源站直连微信 API）
 # 密钥全部走 GitHub Secrets，绝不硬编码。
 name: 副业日报每日生成
 
 on:
-  # 注意：定时发布已由 CNB（.cnb.yml，北京时间 06:00 / 19:00）独家承担，
-  # 以避免与 GitHub Actions 同时触发导致向 dajiayouxuan.com 双发（P0 修复）。
-  # 本 workflow 仅保留手动触发（workflow_dispatch）作为应急 / 重渲染手段，
-  # 日常自动化由 CNB 单一来源驱动，杜绝重复发稿。
+  # 单发布方治理：本 workflow 无自有 schedule，避免与任何定时源重复发稿。
+  # 日常自动化由宝塔 trigger_daily.sh 每日 19:00（北京时间）经 workflow_dispatch 触发；
+  # CNB 流水线仅做诊断（FUYR_DISABLE_PUBLISH=1），GitHub Actions 为唯一发布方。
   workflow_dispatch:
     inputs:
       force:

@@ -34,5 +34,21 @@
   { "id": "growthhackers", "type": "rss", "url": "https://growthhackers.com/feed", "name": "GrowthHackers" },
   { "id": "devto", "type": "rss", "url": "https://dev.to/feed", "name": "Dev.to" },
   { "id": "lobsters", "type": "rss", "url": "https://lobste.rs/rss", "name": "Lobsters" },
-  { "id": "hn_show", "type": "rss", "url": "https://hnrss.org/show", "name": "Hacker News Show" }
+  { "id": "hn_show", "type": "rss", "url": "https://hnrss.org/show", "name": "Hacker News Show" },
+
+  { "id": "reddit_sideproject", "type": "reddit_json", "url": "https://www.reddit.com/r/SideProject/hot.json?limit=25", "name": "Reddit r/SideProject", "added_by": "curated", "added_date": "2026-08-16", "rationale": "独立开发者项目展示社区，高相关" },
+  { "id": "reddit_indiehackers", "type": "reddit_json", "url": "https://www.reddit.com/r/indiehackers/hot.json?limit=25", "name": "Reddit r/indiehackers", "added_by": "curated", "added_date": "2026-08-16", "rationale": "indie hacker 社区" },
+  { "id": "reddit_entrepreneur", "type": "reddit_json", "url": "https://www.reddit.com/r/Entrepreneur/hot.json?limit=25", "name": "Reddit r/Entrepreneur", "added_by": "curated", "added_date": "2026-08-16", "rationale": "创业/副业讨论社区" },
+  { "id": "reddit_artificial", "type": "reddit_json", "url": "https://www.reddit.com/r/artificial/hot.json?limit=25", "name": "Reddit r/artificial", "added_by": "curated", "added_date": "2026-08-16", "rationale": "AI 资讯社区，高相关" },
+  { "id": "reddit_localllama", "type": "reddit_json", "url": "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=25", "name": "Reddit r/LocalLLaMA", "added_by": "curated", "added_date": "2026-08-16", "rationale": "LLM/AI 工具实践" },
+  { "id": "reddit_selfhosted", "type": "reddit_json", "url": "https://www.reddit.com/r/selfhosted/hot.json?limit=25", "name": "Reddit r/selfhosted", "added_by": "curated", "added_date": "2026-08-16", "rationale": "自托管/技术副业" },
+  { "id": "smashing", "type": "rss", "url": "https://www.smashingmagazine.com/feed/", "name": "Smashing Magazine", "added_by": "curated", "added_date": "2026-08-16", "rationale": "前端/工程高质量博客" },
+  { "id": "hn_best", "type": "rss", "url": "https://hnrss.org/best", "name": "Hacker News Best", "added_by": "curated", "added_date": "2026-08-16", "rationale": "HN 最高赞长文，质量天花板" },
+  { "id": "theresanaiforthat", "type": "rss", "url": "https://theresanaiforthat.com/feed/", "name": "There's An AI For That", "added_by": "curated", "added_date": "2026-08-16", "rationale": "AI 工具聚合，强相关" },
+  { "id": "lennys", "type": "rss", "url": "https://www.lennysnewsletter.com/feed", "name": "Lenny's Newsletter", "added_by": "curated", "added_date": "2026-08-16", "rationale": "产品/增长/职业高质量 newsletter" },
+  { "id": "yc_blog", "type": "rss", "url": "https://www.ycombinator.com/blog/rss.xml", "name": "Y Combinator Blog", "added_by": "curated", "added_date": "2026-08-16", "rationale": "顶级孵化器官方博客" },
+  { "id": "stackdiary", "type": "rss", "url": "https://stackdiary.com/feed/", "name": "Stack Diary", "added_by": "curated", "added_date": "2026-08-16", "rationale": "AI/生产力工具实战评测" },
+  { "id": "saastr", "type": "rss", "url": "https://www.saastr.com/feed/", "name": "SaaStr", "added_by": "curated", "added_date": "2026-08-16", "rationale": "SaaS/创业增长高质量博客" },
+  { "id": "indiehackers_blog", "type": "rss", "url": "https://www.indiehackers.com/blog/rss", "name": "Indie Hackers Blog", "added_by": "curated", "added_date": "2026-08-16", "rationale": "独立开发者官方博客" },
+  { "id": "spi", "type": "rss", "url": "https://www.smartpassiveincome.com/feed/", "name": "Smart Passive Income", "added_by": "curated", "added_date": "2026-08-16", "rationale": "被动收入/副业经典 newsletter" }
 ]

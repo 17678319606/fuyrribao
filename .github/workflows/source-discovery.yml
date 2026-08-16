@@ -60,6 +60,11 @@ jobs:
           DISCOVER_CHANGES="$(echo "$DISCOVER_OUTPUT" | grep -oE 'DISCOVER_CHANGES=[0-9]+' | tail -1 | cut -d= -f2)"
           echo "DISCOVER_CHANGES=${DISCOVER_CHANGES:-0}"
 
+      - name: 源多样性体检（best-effort，监控漏源/垄断）
+        if: always()
+        run: |
+          python scripts/source_manager.py diversity || true
+
       - name: 提交新内容源（若有）
         if: success()
         run: |

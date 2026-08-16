@@ -9,6 +9,10 @@ __pycache__/
 # - state/source_status.json、state/last_posted.json：临时诊断，不持久化。
 # - state/daily_report_*.json：当日增量累积日报（跨运行保留，走 Actions 缓存，不提交）。
 # - state/.gen_changed：generate→publish 的变更标记，不提交。
+# - state/source_metrics.json、source_actions.json、source_credit_review.json、source_discovery_log.json：
+#   源征信 / 发现运行时诊断产物，本地生成不入库。
+# - state/source_diversity.json：源多样性体检产物（diversity_report 输出），本地生成不入库。
+# - state/republished.json：单条二次发布去重记录（运行时累积），不入库。
 data/
 state/seen.json
 state/cid_readme_snapshot.txt
@@ -16,5 +20,11 @@ state/source_status.json
 state/last_posted.json
 state/daily_report_*.json
 state/.gen_changed
+state/source_metrics.json
+state/source_actions.json
+state/source_credit_review.json
+state/source_discovery_log.json
+state/source_diversity.json
+state/republished.json
 # 含真实密钥的本地交付模板，禁止入库
 env.fuyrribao.clean.yml

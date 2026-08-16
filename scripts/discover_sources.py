@@ -12,8 +12,9 @@
   - 只改文件、不碰 git；提交由流水线步骤完成。
 
 用法：
-  python scripts/discover_sources.py            # 例行发现（定时/手动）
-  python scripts/discover_sources.py --dry-run  # 只评估不写入
+  python scripts/discover_sources.py                  # 例行发现（定时/手动）
+  python scripts/discover_sources.py --dry-run        # 只评估不写入
+  python scripts/discover_sources.py --opml feeds.opml  # 导入 OPML 并自动评估纳入
 """
 import os
 import sys
@@ -21,6 +22,7 @@ import json
 import re
 import time
 import datetime
+import hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
@@ -28,9 +30,9 @@ import common as C
 LOG = C.get_logger()
 
 # 综合准入阈值（与 docs/source-standard.md 一致）
-ACCEPT_COMPOSITE = 18          # 综合分 ≥ 18/25
-ACCEPT_MIN_DIM = 3             # 每个维度 ≥ 3
-REVIEW_COMPOSITE = 14          # 14–17 仅记录待审
+ACCEPT_COMPOSITE = 16          # 综合分 ≥ 16/25（略放宽，纳入高质量小众源）
+ACCEPT_MIN_DIM = 3             # 每个维度 ≥ 3（防单维劣质源混入）
+REVIEW_COMPOSITE = 12          # 12–15 仅记录待审（扩待审网，人工可捞）
 
 # 主题相关度词表（副业/AI/独立开发/增长/创业）
 TOPIC_LEXICON = [
@@ -82,6 +84,28 @@ CANDIDATE_SEEDS = [
      "name": "Hacker News Show", "rationale": "HN 深度长文，质量高（同 host 已验证可用）"},
     {"id": "smashing", "type": "rss", "url": "https://www.smashingmagazine.com/feed/",
      "name": "Smashing Magazine", "rationale": "前端/工程高质量博客"},
+]
+
+# 人工策展的高相关常驻种子（替代"reeddaily 自动爬取"——reeddaily 的 OPML/feed 在登录
+# 鉴权后，免费 cron 无法批量拉取；故改为：由我们（或用户提供 OPML）手动精选优质 feed
+# 常驻为种子，持续经同一套 validate+score 管线评估，达标即纳入。零新增运行时成本。）
+CURATED_SEEDS = [
+    {"id": "hn_best", "type": "rss", "url": "https://hnrss.org/best",
+     "name": "Hacker News Best", "rationale": "HN 最高赞长文，质量天花板"},
+    {"id": "theresanaiforthat", "type": "rss", "url": "https://theresanaiforthat.com/feed/",
+     "name": "There's An AI For That", "rationale": "AI 工具聚合，强相关"},
+    {"id": "lennys", "type": "rss", "url": "https://www.lennysnewsletter.com/feed",
+     "name": "Lenny's Newsletter", "rationale": "产品/增长/职业高质量 newsletter"},
+    {"id": "yc_blog", "type": "rss", "url": "https://www.ycombinator.com/blog/rss.xml",
+     "name": "Y Combinator Blog", "rationale": "顶级孵化器官方博客"},
+    {"id": "stackdiary", "type": "rss", "url": "https://stackdiary.com/feed/",
+     "name": "Stack Diary", "rationale": "AI/生产力工具实战评测"},
+    {"id": "saastr", "type": "rss", "url": "https://www.saastr.com/feed/",
+     "name": "SaaStr", "rationale": "SaaS/创业增长高质量博客"},
+    {"id": "indiehackers_blog", "type": "rss", "url": "https://www.indiehackers.com/blog/rss",
+     "name": "Indie Hackers Blog", "rationale": "独立开发者官方博客"},
+    {"id": "spi", "type": "rss", "url": "https://www.smartpassiveincome.com/feed/",
+     "name": "Smart Passive Income", "rationale": "被动收入/副业经典 newsletter"},
 ]
 
 
@@ -190,6 +214,53 @@ def github_search_candidates():
     return out
 
 
+def parse_opml(path):
+    """解析 OPML（1.0/2.0，兼容嵌套 outline 与 RDF/ATTR 变体），产出候选源列表。
+
+    只取含 xmlUrl 的 outline（即真实 feed），按 url 去重；其余（纯目录节点）跳过。
+    返回的每条候选会进入与 CANDIDATE_SEEDS 完全相同的 validate+score 管线，达标即纳入。
+    这是"reeddaily 策展 RSS → 纳入"诉求的落地形态：用户从 reeddaily/任意阅读器导出
+    OPML，运行 `python discover_sources.py --opml xxx.opml` 即可自动评估纳入。零新增运行时成本。
+    """
+    try:
+        raw = open(path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception as e:
+        LOG.warning("读取 OPML 失败 %s: %s", path, e)
+        return []
+    out, seen = [], set()
+    for m in re.finditer(r"<outline\b([^>]*)/?>", raw, re.I | re.S):
+        attrs = m.group(1)
+
+        def _attr(name):
+            mm = re.search(r'%s\s*=\s*["\']([^"\']*)["\']' % re.escape(name), attrs, re.I)
+            return mm.group(1).strip() if mm else ""
+
+        xmlurl = _attr("xmlUrl")
+        if not xmlurl:
+            continue
+        xmlurl = xmlurl.strip()
+        if xmlurl in seen:
+            continue
+        seen.add(xmlurl)
+        host = _host_of(xmlurl)
+        name = _attr("title") or _attr("text") or host
+        # id 同时含 host 前缀 + url 哈希，避免同 host 多 feed（如 /feed 与 /comments/feed）冲突被静默丢源
+        uid = "opml_%s_%s" % (
+            re.sub(r"[^a-z0-9]+", "_", host.lower()).strip("_") or "h",
+            hashlib.md5(xmlurl.encode("utf-8")).hexdigest()[:10],
+        )
+        out.append({
+            "id": uid,
+            "type": "rss",
+            "url": xmlurl,
+            "name": name,
+            "rationale": "OPML 导入（%s）" % os.path.basename(path),
+            "added_by": "opml-import",
+        })
+    LOG.info("OPML %s 解析出 %d 个候选 feed", path, len(out))
+    return out
+
+
 def _call_llm_score(url, name, sample_titles):
     """用璇玑网关对候选源做五维精评。失败返回 None（退回启发式）。"""
     import requests
@@ -273,10 +344,22 @@ def main():
     existing_hosts = {_host_of(s.get("url", "")) for s in sources}
     existing_names = {s.get("name", "").lower() for s in sources}
 
-    candidates = list(CANDIDATE_SEEDS) + github_search_candidates()
+    # 候选池 = 社区种子 + 人工策展常驻种子 + GitHub Search + (可选)OPML 导入
+    candidates = list(CANDIDATE_SEEDS) + list(CURATED_SEEDS) + github_search_candidates()
+    if "--opml" in sys.argv:
+        try:
+            opml_path = sys.argv[sys.argv.index("--opml") + 1]
+            candidates += parse_opml(opml_path)
+        except Exception as e:
+            LOG.warning("OPML 参数解析失败: %s", e)
     # 去重：已在 sources.json 中的跳过
     candidates = [c for c in candidates
                   if c.get("id") not in existing_ids and c.get("url") not in existing_urls]
+
+    # 活跃源软上限守卫：active+trial 已达 SOURCE_ACTIVE_CAP 时，新源只评估不写入（防 OPML 批量溢出）
+    metrics = C.load_json(C.SOURCE_METRICS_FILE, {})
+    active_n = sum(1 for s in sources
+                   if metrics.get(s.get("id"), {}).get("status", "active") in ("active", "trial", "legacy"))
 
     log = {"date": C.date_str(), "candidates": len(candidates), "accepted": [], "review": [], "rejected": []}
     added = 0
@@ -289,13 +372,19 @@ def main():
         entry = {"id": c.get("id"), "url": c.get("url"), "name": c.get("name"),
                  "type": c.get("type"), "scores": dims, "reason": reason}
         if ok:
+            if active_n >= C.SOURCE_ACTIVE_CAP:
+                # 超活跃上限：降级为待审，不写入（避免 OPML/批量导入冲爆目标源数）
+                log["review"].append(entry)
+                LOG.info("• %s 达标但活跃源已达上限(%d)，转待审不写入", c.get("id"), C.SOURCE_ACTIVE_CAP)
+                continue
             new_cfg = {"id": c["id"], "type": c["type"], "url": c["url"], "name": c["name"],
-                       "added_by": "auto-discover",
+                       "added_by": c.get("added_by", "auto-discover"),
                        "added_date": C.date_str(),
                        "score": dims["composite"]}
             sources.append(new_cfg)
             existing_ids.add(c["id"]); existing_urls.add(c["url"])
             existing_hosts.add(_host_of(c["url"])); existing_names.add(c["name"].lower())
+            active_n += 1
             log["accepted"].append(entry)
             added += 1
             LOG.info("✓ %s 自动引入（综合 %d，%s）", c.get("id"), dims["composite"], reason)

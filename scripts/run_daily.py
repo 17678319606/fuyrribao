@@ -98,6 +98,12 @@ def main():
                         if k2 not in status["steps"]:
                             status["steps"][k2] = {"ok": None, "tail": "skipped（前置步骤失败）"}
                     break
+        # 单条二次发布（默认关闭，FUYR_REPUBLISH=1 才启用；非阻塞，失败不影响主流程）
+        try:
+            if os.environ.get("FUYR_REPUBLISH", "").strip() in ("1", "true", "True", "yes"):
+                _run("republish_items.py")
+        except Exception as e:
+            print("REPUBLISH: 单条发布失败（不影响主流程）: %s" % e)
     except Exception as e:
         status["ok"] = False
         status["error"] = str(e)
