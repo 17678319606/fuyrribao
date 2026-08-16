@@ -47,8 +47,10 @@ env:
   GEMINI_RPD: ${{ github.event.inputs.rpd || '800' }}
   GEMINI_MAX_CONCURRENCY: '1'
   # —— 测试专用：降低周报门槛，让单日少量条目也能跑合成；WP 指本地避免真实发布 ——
-  ROUNDUP_MIN_ITEMS: '3'
-  ROUNDUP_MIN_ENTRIES: '3'
+  # 对比验证阶段进一步降到 1，确保即便当日日报仅 2 条也能合成周报供内容质检
+  # （生产环境仍用较高门槛保证周报信息密度；此处仅为迭代实测）。
+  ROUNDUP_MIN_ITEMS: '1'
+  ROUNDUP_MIN_ENTRIES: '1'
   ROUNDUP_TOP_K: '14'
   WP_URL: 'http://localhost:9'
   WP_AUTH: 'dummy-test-noop'
@@ -217,4 +219,5 @@ jobs:
           print(json.dumps(out, ensure_ascii=False))
           print("===== END_SNAPSHOT =====")
           PY
+
 
