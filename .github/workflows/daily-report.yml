@@ -1,9 +1,9 @@
 # 副业日报每日生成流水线（GitHub 主力版 v4）
 # ─────────────────────────────────────────────────────────────────────
 # 触发方式：
-#   1. 定时触发：北京时间 06:01（晨间首版）+ 19:01（晚间更新）
-#   2. 手动触发：workflow_dispatch（支持 force 强制重渲染）
-#   3. 兼容旧 trigger_daily.sh 派发（宝塔 cron → GitHub Dispatch API）
+#   1. 定时发布：已由 CNB（.cnb.yml，北京时间 06:00 晨间 + 19:00 晚间）独家承担，避免双发（P0）
+#   2. 手动触发：workflow_dispatch（支持 force 强制重渲染 / clean 清洁模式）
+#   3. 应急 / 重渲染专用，日常自动化不再经本 workflow 的 schedule
 #
 # AI 后端：璇玑国内网关 ai.jinbufenzi.com（主用，已验证可出文章）
 # 发布目标：WordPress + 公众号（freepublish）
@@ -11,10 +11,10 @@
 name: 副业日报每日生成
 
 on:
-  schedule:
-    # 北京时间 06:01 + 19:01（UTC+8 = UTC 22:01 / 11:01）
-    - cron: '1 22 * * *'   # 晨间 06:01 北京时间
-    - cron: '1 11 * * *'   # 晚间 19:01 北京时间
+  # 注意：定时发布已由 CNB（.cnb.yml，北京时间 06:00 / 19:00）独家承担，
+  # 以避免与 GitHub Actions 同时触发导致向 dajiayouxuan.com 双发（P0 修复）。
+  # 本 workflow 仅保留手动触发（workflow_dispatch）作为应急 / 重渲染手段，
+  # 日常自动化由 CNB 单一来源驱动，杜绝重复发稿。
   workflow_dispatch:
     inputs:
       force:

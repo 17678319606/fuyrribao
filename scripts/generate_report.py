@@ -104,6 +104,30 @@ def _trim_signals_for_prompt(signals, max_content=1500):
     return out
 
 
+def _prefilter_signals(signals):
+    """送 AI 前的免费预筛（零 LLM 调用，不破免费额度）：去重 + 丢桩。
+
+    - 去重：同一 item_dedup_key 只保留首次出现，避免重复源/镜像站灌水；
+    - 丢桩：标题+正文合计 < PREFILTER_MIN_LEN 且不含主题词的极短条目直接丢弃，
+      降噪并节省后续 AI 调用额度。
+    """
+    seen, out = set(), []
+    for s in signals:
+        k = C.item_dedup_key(s)
+        if k:
+            if k in seen:
+                continue
+            seen.add(k)
+        text = ((s.get("title") or "") + " " + (s.get("content") or "")).strip()
+        if len(text) < C.PREFILTER_MIN_LEN and not any(
+            kw.lower() in text.lower() for kw in C.SOURCE_RELEVANCE_KEYWORDS
+        ):
+            continue
+        out.append(s)
+    LOG.info("免费预筛：%d → %d（去重+丢桩）", len(signals), len(out))
+    return out
+
+
 def _is_valid_proxy(p):
     """校验代理 URL 合法且非占位符（避免中文/字面占位符被当成真实代理）。"""
     try:
@@ -846,9 +870,12 @@ def _validate(report):
                 LOG.warning("模块 %s 第 %d 条为字符串（非对象），已清洗为标题卡片", key, idx)
                 cleaned.append({"title": it[:200], "source_name": "",
                                 "source_url": "", "signal": ""})
-            else:
-                LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
-        mods[key] = cleaned
+        else:
+            LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
+        if len(cleaned) > C.MAX_ITEMS_PER_MODULE:
+            LOG.info("模块 %s 条目 %d 超出每模块上限 %d，截断至上限",
+                     key, len(cleaned), C.MAX_ITEMS_PER_MODULE)
+        mods[key] = cleaned[:C.MAX_ITEMS_PER_MODULE]
     assert "daily_summary" in report, "缺少 daily_summary"
     ds = report["daily_summary"]
     assert isinstance(ds, dict), "daily_summary 不是对象"
@@ -1361,6 +1388,9 @@ def main():
     for mod in C.MODULES:
         for it in acc_modules.get(mod, []):
             existing_keys.add(C.item_dedup_key(it))
+
+    # 送 AI 前的免费预筛（去重 + 丢桩，零 LLM）
+    signals = _prefilter_signals(signals)
 
     # 本次新增（未被当日累积过的）信号
     new_signals = [s for s in signals if C.item_dedup_key(s) not in existing_keys]
