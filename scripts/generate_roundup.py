@@ -256,49 +256,89 @@ def _derive_seed(items):
 # AI 调用
 # ─────────────────────────────────────────────────────────────────────
 def _ai_endpoints():
-    """返回可用的 OpenAI 兼容端点列表（主用 → 兜底），任一可用即可。
-
-    注意：Gemini 原生端点(generativelanguage.googleapis.com)与 /chat/completions
-    不兼容，本脚本只走 OpenAI 兼容路径，故 roundup.yml 默认把璇玑(ai.jinbufenzi.com)
-    设为主用端点。若日后要接 Gemini，需走原生 generateContent 路径（见 generate_report.py）。
+    """返回可用端点列表，每项为 (kind, base, key, model)。
+    kind="gemini" → Gemini 原生 generateContent（免费层，主用）；
+    kind="openai" → OpenAI 兼容 /chat/completions（璇玑等兜底）。
+    任一可用即可；Gemini 原生优先，彻底摆脱周报对单一付费璇玑端点的强依赖
+    （Problem G：run3 / run 31977953859 周报均因璇玑时段性宕机而整期失败，
+    而日报侧早已用「Gemini 原生主用 + 璇玑兜底」，周报侧补齐以对齐）。
     """
     eps = []
-    b1 = (os.environ.get("ai_base_url", "") or os.environ.get("AI_BASE_URL", "")).rstrip("/")
-    k1 = (os.environ.get("AI_API_KEY", "") or os.environ.get("ai_api_key", "")
-          or os.environ.get("AI_SIDEHUSTLE_API_KEY", "")).strip()
-    m1 = (os.environ.get("AI_MODEL", "") or os.environ.get("ai_model", "") or "auto").strip()
-    if b1 and k1:
-        eps.append((b1, k1, m1))
-    b2 = (os.environ.get("AI_FALLBACK_URL", "")).rstrip("/")
-    k2 = (os.environ.get("AI_FALLBACK_KEY", "")).strip()
-    m2 = (os.environ.get("AI_FALLBACK_MODEL", "") or "auto").strip()
-    if b2 and k2:
-        eps.append((b2, k2, m2))
+    base = (os.environ.get("AI_BASE_URL", "") or "").rstrip("/")
+    gem_key = (os.environ.get("GEMINI_API_KEY", "") or "").strip()
+    model = (os.environ.get("AI_MODEL", "") or "gemini-flash-latest").strip()
+    # Gemini 原生（免费）：仅当 base 是 Gemini 主机且配了 key
+    if "generativelanguage.googleapis.com" in base and gem_key:
+        eps.append(("gemini", base, gem_key, model))
+    # OpenAI 兼容兜底（璇玑）
+    fb = (os.environ.get("AI_FALLBACK_URL", "") or "").rstrip("/")
+    fk = (os.environ.get("AI_FALLBACK_KEY", "") or "").strip()
+    fm = (os.environ.get("AI_FALLBACK_MODEL", "") or "auto").strip()
+    if fb and fk:
+        eps.append(("openai", fb, fk, fm))
     if not eps:
-        raise RuntimeError("未配置 AI 端点(AI_BASE_URL/AI_API_KEY 或 AI_FALLBACK_*)")
+        raise RuntimeError("未配置 AI 端点(AI_BASE_URL+GEMINI_API_KEY 或 AI_FALLBACK_*)")
     return eps
+
+
+def _call_gemini_native(base, key, model, system, user):
+    """Gemini 原生 generateContent（非流式）。周报低频、单次合成，足够；
+    与日报侧 _call_gemini_native 对齐，走免费层并受 AIRateLimiter 管控。"""
+    import requests
+    url = "%s/models/%s:generateContent" % (base.rstrip("/"), model)
+    auth = {"Content-Type": "application/json", "x-goog-api-key": key}
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"temperature": 0.85, "maxOutputTokens": 16000},
+    }
+    last_err = None
+    for i in range(1, 3):  # 免费层偶发 429，轻量重试
+        try:
+            r = requests.post(url, headers=auth, json=body, timeout=150)
+            if r.status_code == 429:
+                wait = 8 * i
+                LOG.warning("Gemini 原生 429，%ds 后重试(%d/2)", wait, i)
+                time.sleep(wait); last_err = RuntimeError("429"); continue
+            r.raise_for_status()
+            d = r.json()
+            return d["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            last_err = e
+            if i < 2:
+                time.sleep(5 * i); continue
+            raise
+    raise last_err or RuntimeError("gemini native failed")
 
 
 def _call_ai(system, user):
     """调用 AI 端点合成周报，带健壮重试（治根因：run3 整期周报因璇玑瞬时连接错而失败）。
 
+    端点顺序：Gemini 原生(免费)主用 → 璇玑(OpenAI 兼容)兜底。
     重试策略：
-      - 传输层错误（ConnectionError / Timeout / 网络抖动 / urllib3 MaxRetryError）：
-        属瞬时故障，指数退避后重试（本端点最多 MAX_TRIES 次，仍失败再换兜底端点）。
-      - HTTP 429 / 5xx：限流或服务端抖动，退避后重试。
-      - HTTP 4xx（非 429，如 400/401/403）：配置/鉴权错误，本端点无望，直接换下一个兜底端点
-        （不浪费重试额度）。
+      - Gemini 原生：免费层偶发 429 轻量重试；失败即转璇玑兜底。
+      - 璇玑(OpenAI 兼容)：传输层错误（ConnectionError / Timeout / 网络抖动）指数退避
+        重试（本端点最多 MAX_TRIES 次，仍失败再换兜底端点）；HTTP 429/5xx 退避重试；
+        HTTP 4xx（非 429）配置/鉴权错误直接换兜底端点（不浪费重试额度）。
     任一端点成功即返回；全部端点耗尽才抛出 last。
     """
     import requests
     from requests.exceptions import HTTPError, ConnectionError as ReqConnectionError, Timeout, RequestException
-    # 统一限速器：非 Gemini 端点仍做 RPM 滑窗限速（不计 Gemini 免费预算），
-    # 避免周报密集调用撞上游 429；周报低频，限速足够温和。
-    C.ai_limiter.throttle(is_gemini=False)
     eps = _ai_endpoints()
     last = None
     MAX_TRIES = 4
-    for (base, key, model) in eps:
+    for (kind, base, key, model) in eps:
+        # 统一限速器：Gemini 原生计入免费预算，璇玑不计（周报低频，限速温和）
+        C.ai_limiter.throttle(is_gemini=(kind == "gemini"))
+        if kind == "gemini":
+            # 免费层主用：原生 generateContent（非流式）
+            try:
+                return _call_gemini_native(base, key, model, system, user)
+            except Exception as e:
+                LOG.warning("Gemini 原生端点失败，转兜底端点: %s", e)
+                last = e
+                continue
+        # OpenAI 兼容路径（璇玑）：重试连接/限流错误
         url = base + "/chat/completions"
         auth = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
         body = {
@@ -705,5 +745,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
