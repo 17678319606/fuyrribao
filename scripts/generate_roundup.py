@@ -281,6 +281,9 @@ def _ai_endpoints():
 
 def _call_ai(system, user):
     import requests
+    # 统一限速器：非 Gemini 端点仍做 RPM 滑窗限速（不计 Gemini 免费预算），
+    # 避免周报密集调用撞上游 429；周报低频，限速足够温和。
+    C.ai_limiter.throttle(is_gemini=False)
     eps = _ai_endpoints()
     last = None
     for (base, key, model) in eps:
