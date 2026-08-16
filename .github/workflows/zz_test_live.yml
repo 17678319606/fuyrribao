@@ -3,7 +3,9 @@
 # 目的：在真实 GitHub Actions 环境跑一次「采集 + AI 生成」，验证：
 #   1) AIRateLimiter 注入成功（RPM 滑窗=10 / 每日预算=800 / 并发闸=1）；
 #   2) 免费版 Gemini 全程不撞 429；
-#   3) 当日日报正常产出（state/daily_report_{today}.json 有条目）。
+#   3) 当日日报正常产出（state/daily_report_{today}.json 有条目）；
+#   4) 【内容质量修复验证】副业视角(perspective)填充率应=100%；
+#      广告/博彩/引流在 fetch 阶段已被 filter_ads 硬拦截（日志见「广告拦截」）。
 # 不调用 publish_wp.py，绝不会污染线上 WordPress / 公众号。
 # 触发：push 到本文件或 scripts/patches/apply_rate_limit.py 自动跑；
 #       也可 manual workflow_dispatch 手动跑（支持多次实测）。
@@ -71,7 +73,7 @@ jobs:
           python scripts/fetch_signals.py
           python scripts/generate_report.py
 
-      - name: 收集实测快照（限速器 + 日报条目）
+      - name: 收集实测快照（限速器 + 日报条目 + perspective 填充率）
         if: always()
         run: |
           python - <<'PY'
@@ -79,26 +81,39 @@ jobs:
           sys.path.insert(0, "scripts")
           import common as C
           snap = C.ai_limiter.snapshot() if hasattr(C, "ai_limiter") else {}
-          # 日报结构：report["modules"] = {模块: [条目,...]}，条数 = 各模块条目之和
           p = os.path.join(C.STATE_DIR, "daily_report_%s.json" % C.date_str())
           n_items = 0
+          persp_filled = 0
+          persp_total = 0
+          mod_breakdown = {}
           if os.path.exists(p):
               try:
                   d = json.load(open(p, encoding="utf-8"))
-                  if isinstance(d, dict):
-                      mods = d.get("modules", {})
-                      if isinstance(mods, dict):
-                          n_items = sum(len(v) for v in mods.values())
+                  mods = d.get("modules", {}) if isinstance(d, dict) else {}
+                  for k, v in mods.items():
+                      if isinstance(v, list):
+                          mod_breakdown[k] = len(v)
+                          n_items += len(v)
+                          for it in v:
+                              if isinstance(it, dict):
+                                  persp_total += 1
+                                  if (it.get("perspective") or "").strip():
+                                      persp_filled += 1
               except Exception:
                   pass
           out = {
               "ai_limiter_snapshot": snap,
               "daily_report_items": n_items,
               "report_exists": os.path.exists(p),
+              "module_breakdown": mod_breakdown,
+              "perspective_filled": persp_filled,
+              "perspective_total": persp_total,
+              "perspective_fill_rate": (round(persp_filled / persp_total, 3) if persp_total else None),
           }
           os.makedirs(C.STATE_DIR, exist_ok=True)
           json.dump(out, open(os.path.join(C.STATE_DIR, "_live_test_result.json"), "w"),
                     ensure_ascii=False, indent=2)
+          print("===== LIVE_TEST_SNAPSHOT =====")
           print(json.dumps(out, ensure_ascii=False))
+          print("===== END_SNAPSHOT =====")
           PY
-
