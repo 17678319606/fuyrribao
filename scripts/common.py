@@ -403,6 +403,16 @@ class AIRateLimiter:
                     self._window.append(time.time())
                     self._used += 1
                     self._save()
+            else:
+                # 非 Gemini 端点（如 OpenAI 兼容的璇玑网关）：仍做 RPM 滑窗限速，
+                # 但不计入 Gemini 免费层每日预算（避免误伤日报配额）。
+                wait = self._admit_rpm()
+                if wait > 0:
+                    logging.getLogger("fuyr.ai_limiter").warning(
+                        "AI 限速（RPM 滑窗，非 Gemini 端点）：补眠 %.1fs", wait)
+                    time.sleep(wait)
+                with self._lock:
+                    self._window.append(time.time())
 
     def snapshot(self):
         self._rollover_day()
