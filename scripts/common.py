@@ -126,7 +126,7 @@ def _normalize_title_key(t):
         return ""
     import re, html as _html
     t = _html.unescape(t.lower().strip())
-    t = re.sub(r'[^\w\u4e0-\u9fff]', '', t)
+    t = re.sub(r'[^\w\u4e00-\u9fff]', '', t)
     return t if len(t) >= 8 else ""
 
 

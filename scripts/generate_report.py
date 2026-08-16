@@ -1149,18 +1149,11 @@ def _title_dedup_report(report):
         else:
             seen_titles[norm] = (mod, idx, text_len)
 
-    # 执行删除
-    for mod, idx in drop:
-        items = mods.get(mod, [])
-        if 0 <= idx < len(items):
-            items.pop(idx)
-            # 后续索引需要调整——简单方案：重建列表时跳过已删
-
-    # 重建：由于 pop 会改变索引，用标记方式更安全
+    # 执行删除：直接用原始索引重建（避免 pop 导致后续索引错位）
     for mod in C.MODULES:
-        items = mods.get(mod, [])
         drop_idxs = {idx for m, idx in drop if m == mod}
         if drop_idxs:
+            items = mods.get(mod, [])
             mods[mod] = [it for i, it in enumerate(items) if i not in drop_idxs]
 
     return report, removed
