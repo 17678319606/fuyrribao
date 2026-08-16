@@ -141,6 +141,11 @@ ai_limiter = AIRateLimiter()
 def patch_report():
     path = _p("generate_report.py")
     s = open(path, encoding="utf-8").read()
+    # 源码已固化 AIRateLimiter（apply_deep_opts.py）→ 运行时补丁退化为无害 no-op，
+    # 既不重复注入也不报错，保留回滚兜底。
+    if "C.ai_limiter.throttle(is_gemini=True)" in s:
+        print("[report] 限速器已固化进源码，跳过运行时补丁")
+        return
     old_def = '''# —— Gemini 免费层限速器 ——
 # Google AI Studio 免费层限制 15 RPM（每分钟 15 次请求）。
 # screen_signals() 分批筛选会在几秒内连续打 ~10 次 AI 调用 → 直接撞 429。
@@ -194,6 +199,9 @@ GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # �
 def patch_roundup():
     path = _p("generate_roundup.py")
     s = open(path, encoding="utf-8").read()
+    if "C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base))" in s:
+        print("[roundup] 限速器已固化进源码，跳过运行时补丁")
+        return
     old = '''            try:
                 r = requests.post(url, headers=auth, json=body, timeout=150)'''
     assert old in s, "roundup 锚点缺失（源码可能已变更）"
