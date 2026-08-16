@@ -1733,6 +1733,12 @@ def main():
         if is_final:
             _ensure_daily_summary(report, base_urls, api_key, model, today)
 
+    # 最终去重：清扫历史缓存（旧策略无去重时写入的脏数据）或本轮合并残留的重复条目。
+    # 幂等——已干净的日报不受影响；仅当确有重复时才告警。
+    report, final_dups = _title_dedup_report(report)
+    if final_dups:
+        LOG.warning("【累积去重】清除历史/合并残留重复条目 %d 条", final_dups)
+
     # 写回累积状态 & 当日报告
     C.save_json(daily_state_path, report)
     out_path = os.path.join(DATA_DIR, f"report-{today}.json")
