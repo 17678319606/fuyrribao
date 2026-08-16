@@ -280,12 +280,24 @@ def _ai_endpoints():
 
 
 def _call_ai(system, user):
+    """调用 AI 端点合成周报，带健壮重试（治根因：run3 整期周报因璇玑瞬时连接错而失败）。
+
+    重试策略：
+      - 传输层错误（ConnectionError / Timeout / 网络抖动 / urllib3 MaxRetryError）：
+        属瞬时故障，指数退避后重试（本端点最多 MAX_TRIES 次，仍失败再换兜底端点）。
+      - HTTP 429 / 5xx：限流或服务端抖动，退避后重试。
+      - HTTP 4xx（非 429，如 400/401/403）：配置/鉴权错误，本端点无望，直接换下一个兜底端点
+        （不浪费重试额度）。
+    任一端点成功即返回；全部端点耗尽才抛出 last。
+    """
     import requests
+    from requests.exceptions import HTTPError, ConnectionError as ReqConnectionError, Timeout, RequestException
     # 统一限速器：非 Gemini 端点仍做 RPM 滑窗限速（不计 Gemini 免费预算），
     # 避免周报密集调用撞上游 429；周报低频，限速足够温和。
     C.ai_limiter.throttle(is_gemini=False)
     eps = _ai_endpoints()
     last = None
+    MAX_TRIES = 4
     for (base, key, model) in eps:
         url = base + "/chat/completions"
         auth = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
@@ -297,20 +309,33 @@ def _call_ai(system, user):
             ],
             "temperature": 0.85,
         }
-        for i in range(1, 4):
+        for i in range(1, MAX_TRIES + 1):
             try:
                 r = requests.post(url, headers=auth, json=body, timeout=150)
-                if r.status_code in (429, 500, 502, 503, 504):
-                    wait = 5 * i
-                    LOG.warning("AI[%s] 返回 %s，%ds 后重试", base, r.status_code, wait)
+                sc = r.status_code
+                if sc == 429 or sc >= 500:
+                    wait = min(30, 5 * i)
+                    LOG.warning("AI[%s] 返回 %s，%ds 后重试(%d/%d)", base, sc, wait, i, MAX_TRIES)
                     time.sleep(wait)
-                    last = RuntimeError("ai %s" % r.status_code)
+                    last = RuntimeError("ai %s" % sc)
                     continue
-                r.raise_for_status()
+                if 400 <= sc < 500:
+                    # 客户端错误（鉴权/配置）本端点无望，直接换兜底端点
+                    last = RuntimeError("ai %s (client error)" % sc)
+                    LOG.warning("AI[%s] 客户端错误 %s（配置/鉴权问题，换兜底端点）", base, sc)
+                    break
                 return r.json()["choices"][0]["message"]["content"]
-            except Exception as e:
+            except HTTPError as e:
                 last = e
-                time.sleep(5 * i)
+                LOG.warning("AI[%s] HTTP 错误 %s，换兜底端点", base, e)
+                break
+            except (ReqConnectionError, Timeout, RequestException) as e:
+                # 瞬时传输错误：指数退避后重试（跨端点兜底前尽量自救）
+                wait = min(30, 3 * (2 ** (i - 1)))
+                LOG.warning("AI[%s] 网络/连接错误(%s)，%ds 后重试(%d/%d)",
+                            base, type(e).__name__, wait, i, MAX_TRIES)
+                last = e
+                time.sleep(wait)
         LOG.warning("AI 端点 %s 失败，尝试下一个兜底端点", base)
     raise last or RuntimeError("ai call failed")
 
@@ -680,4 +705,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
