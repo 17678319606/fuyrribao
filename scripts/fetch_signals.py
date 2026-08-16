@@ -313,7 +313,12 @@ PARSERS = {
 # TG / 论坛类源常混入博彩推广、引流软文；这类内容语义上像真内容，
 # 仅靠 AI 守门易被放过（截图实锤：铂莱娱乐/贵宾会 750.cc 漏进精选）。
 # 故在采集层用关键词+正则硬性拦截，零成本、零额度、永不送入 AI。
-_AD_TERMS = [
+# 两级策略：
+#   HARD（博彩/赌博/引流包装词）—— 标题或正文命中即删（unambiguous 黑产信号，零误杀）。
+#   SOFT（联系方式/营销 CTA 词）—— 仅在【标题】出现才判广告；这些词（二维码/免费领/限时
+#        福利/加微信）在合法文章正文与订阅 CTA 里高频出现，若对正文放行会误杀正常科技资讯
+#        （实测曾把爱范儿 AI 新闻整批误删）。故 SOFT 仅作用于标题。
+_AD_HARD_TERMS = [
     # 博彩/赌博（ unambiguous，命中即删）
     "博彩", "菠菜", "赌博", "娱乐城", "贵宾会", "棋牌", "百家乐", "老虎机",
     "投注", "下注", "盘口", "返水", "上押", "网投", "黑平台", "黑台", "野鸡",
@@ -324,21 +329,30 @@ _AD_TERMS = [
     "信誉担保", "全网担保", "集团背书", "全网首发", "强热启航",
     "注册送", "首充", "充值送", "稳赚不赔", "一夜暴富",
     "躺着赚", "稳赚", "包赚", "带赚", "导师带", "带你玩",
-    # 联系方式引流（加微信/二维码/私聊客服等）
+]
+_AD_SOFT_TERMS = [
+    # 联系方式 / 营销 CTA（仅标题判定，避免正文订阅 CTA 误杀正常内容）
     "加微信", "微信号", "扫码添加", "扫码领取", "二维码", "私聊客服", "小妹",
     "小哥哥带你", "一对一指导", "免费领", "限时福利",
 ]
-# 命中任一即判广告；此表刻意只收高置信黑产/拉人词，避免误伤正常副业内容
-# （如返利在淘宝客语境属正常，不入表以降低误杀）。
-_AD_RE = re.compile("|".join(re.escape(t) for t in _AD_TERMS))
+_AD_HARD_RE = re.compile("|".join(re.escape(t) for t in _AD_HARD_TERMS))
+_AD_SOFT_RE = re.compile("|".join(re.escape(t) for t in _AD_SOFT_TERMS))
 # 典型垃圾短域名 + 担保话术组合（博彩站常用 .cc/.vip/.top 等）
 _SPAM_DOMAIN = re.compile(r"[a-z0-9-]{3,}\.(cc|vip|top|xyz|asia|bet|casino|tv|club)\b", re.I)
 
-def is_ad_spam(text):
-    """标题+正文含高置信广告/博彩/引流信号 → True（应丢弃）。"""
+def is_ad_spam(text, title=""):
+    """高置信广告/博彩/引流信号 → True（应丢弃）。
+
+    HARD 词（博彩/赌博/引流包装）命中标题或正文即删；
+    SOFT 词（联系方式/营销 CTA）仅在标题出现才判广告，避免正文订阅 CTA 误杀正常内容。
+    """
     if not text:
         return False
-    if _AD_RE.search(text):
+    # HARD：标题或正文任一命中即删（unambiguous 黑产信号）
+    if _AD_HARD_RE.search(text):
+        return True
+    # SOFT：仅对标题生效（正文常见「扫码关注 / 免费领资料」等正常 CTA）
+    if title and _AD_SOFT_RE.search(title):
         return True
     # 短域名 + 担保/送/赚 任一相伴 → 强广告信号（避免单独 .cc 误杀正常内容）
     if _SPAM_DOMAIN.search(text) and re.search(r"担保|送|赚|充值|开户|代理|邀请", text):
@@ -349,8 +363,9 @@ def filter_ads(signals):
     """就地过滤广告/博彩信号，返回 (保留列表, 丢弃数)。"""
     kept, dropped = [], 0
     for it in signals:
-        blob = "%s %s" % (it.get("title", ""), it.get("content", ""))
-        if is_ad_spam(blob):
+        title = it.get("title", "") or ""
+        content = it.get("content", "") or ""
+        if is_ad_spam(title + " " + content, title):
             dropped += 1
             LOG.warning("【广告拦截】丢弃疑似博彩/引流广告：%s | %s",
                         it.get("source_name", ""), (it.get("title") or "")[:50])
