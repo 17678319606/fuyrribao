@@ -54,8 +54,11 @@ jobs:
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
-          python scripts/discover_sources.py $ARGS
-          echo "changes=$(grep -o 'DISCOVER_CHANGES=[0-9]*' <(python scripts/discover_sources.py $ARGS) | cut -d= -f2)" >> "$GITHUB_OUTPUT" || true
+          # 单次运行：执行 + 写源 + 输出计数（避免进程替换再跑一遍浪费 AI 额度与网络）
+          DISCOVER_OUTPUT="$(python scripts/discover_sources.py $ARGS 2>&1)" || true
+          echo "$DISCOVER_OUTPUT"
+          DISCOVER_CHANGES="$(echo "$DISCOVER_OUTPUT" | grep -oE 'DISCOVER_CHANGES=[0-9]+' | tail -1 | cut -d= -f2)"
+          echo "DISCOVER_CHANGES=${DISCOVER_CHANGES:-0}"
 
       - name: 提交新内容源（若有）
         if: success()
