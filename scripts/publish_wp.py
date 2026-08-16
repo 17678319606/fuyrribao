@@ -87,6 +87,24 @@ S_METH = ("font-size:15.5px;line-height:1.85;color:#3a3a3a;margin:0 0 12px;overf
 S_EV = "margin-top:10px;font-size:13px;color:#8a8a8a;line-height:1.8;"
 S_TEXT_LINK = "color:#2f6b5e;font-weight:600;"
 S_FOOTER = "margin-top:48px;text-align:center;color:#b0aca3;font-size:12px;padding-top:20px;border-top:1px solid #e6e3dd;"
+# 赞赏区样式（正文底部，点击展开二维码，不影响阅读）
+S_TIP_WRAP = ("margin-top:36px;text-align:center;"
+              "padding:24px 16px;background:linear-gradient(135deg,#fffbf0,#fff8e6);"
+              "border-radius:14px;border:1px solid #f0e6d3;")
+S_TIP_BTN = ("display:inline-flex;align-items:center;gap:8px;"
+             "cursor:pointer;color:#b88a2f!important;font-size:14px!important;font-weight:700;"
+             "padding:10px 28px;border-radius:999px;"
+             "background:#fff!important;border:1.5px solid #e6d5a8!important;"
+             "list-style:none;user-select:none;transition:all .25s;")
+S_TIP_QR = ("max-width:220px;margin:16px auto 0;border-radius:12px;"
+            "box-shadow:0 4px 20px rgba(180,138,47,.15);")
+
+# 微信赞赏码（base64 内联，避免外部依赖；点击赞赏区时展示）
+_TIP_QR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "tip-qr.jpg")
+_TIP_QR_B64 = None
+if os.path.isfile(_TIP_QR_PATH):
+    with open(_TIP_QR_PATH, "rb") as _f:
+        _TIP_QR_B64 = base64.b64encode(_f.read()).decode("ascii")
 
 # ── 模块定义 ──
 MODULES = [
@@ -284,11 +302,32 @@ def render(report):
             f'</div></section>\n'
         )
 
+    # ── 赞赏区（正文底部，details/summary 纯 HTML 展开，零 JS）──
+    tip_html = ""
+    if _TIP_QR_B64:
+        tip_html = (
+            f'\n<div style="{S_TIP_WRAP}">'
+            f'<details style="margin:0;">'
+            f'<summary style="{S_TIP_BTN}">☕ 觉得有用？赞赏支持</summary>'
+            f'<div style="{S_TIP_QR}">'
+            f'<img src="data:image/jpeg;base64,{_TIP_QR_B64}" '
+            f'alt="微信赞赏码" style="width:100%;border-radius:12px;display:block;" '
+            f'loading="lazy" />'
+            f'<p style="margin:10px 0 0;color:#8a7340;font-size:12px;'
+            f'line-height:1.6;">扫描二维码 · 随意金额 · 每一份都让 AI 日报走得更远</p>'
+            f'</div>'
+            f'</details></div>\n'
+        )
+
     html = (
         f'<!-- dr-renderer:{C.RENDERER_VERSION} -->'
         f'<div style="{S_WRAP}">\n'
-        f'{body}\n'
-        f'<footer style="{S_FOOTER}">本文由 GitHub Actions 自动生成并发布。</footer>\n'
+        f'{body}'
+        f'{tip_html}'
+        f'<footer style="{S_FOOTER}">'
+        f'本文由 AI 驱动生成，每日调用大模型 API 汇总筛选 · '
+        f'<a href="https://dajiayouxuan.com" style="color:#2f6b5e;text-decoration:none;">大家有选</a>'
+        f'</footer>\n'
         f'</div>'
     )
     cleaned = _strip_links(html)
@@ -385,159 +424,6 @@ def _record_posted(today, post_id, link):
         LOG.warning("回写 last_posted.json 失败（不影响发布）：%s", e)
 
 
-# ─────────────────────────────────────────────────────────────────────
-# SEO 增强（Item1 标签+相关内链 / Item3 on-page 结构化数据）
-# ─────────────────────────────────────────────────────────────────────
-
-def get_tag_id(session, base, auth, name):
-    """解析 WP 标签（按名搜索，命中复用，未命中则新建）。"""
-    import requests
-    r = session.get(base + "/wp-json/wp/v2/tags", params={"search": name},
-                    headers=auth, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-    if data:
-        return data[0]["id"]
-    r = session.post(base + "/wp-json/wp/v2/tags", json={"name": name},
-                     headers=auth, timeout=30)
-    r.raise_for_status()
-    return r.json()["id"]
-
-
-def _category_link(session, base, auth, cat_id):
-    """取类目归档页 URL（供 BreadcrumbList 结构化数据使用）。"""
-    import requests
-    r = session.get(base + f"/wp-json/wp/v2/categories/{cat_id}", headers=auth, timeout=30)
-    r.raise_for_status()
-    return r.json().get("link", base)
-
-
-def _resolve_module_tags(session, base, auth):
-    """把三大模块名作为 WP 标签挂到日报（复用已有标签，不新建类目）。"""
-    ids = []
-    for _, t, _ in MODULES:
-        ids.append(get_tag_id(session, base, auth, t))
-    return ids
-
-
-def _faq_visible_section(report):
-    """正文尾部可见的『常见问题』区块——与 FAQPage 结构化数据一一对应（合规）。"""
-    counts = {k: len(report.get("modules", {}).get(k, [])) for k, _, _ in MODULES}
-    total = sum(counts.values())
-    qas = [
-        ("今天的副业日报有哪些内容模块？",
-         f"分为「项目机会库 {counts['project_opportunities']} 条」「增长运营 {counts['growth_operations']} 条」「观点心法 {counts['views_insights']} 条」三大模块，按主题分块呈现。"),
-        ("今天的副业日报一共精选了多少条内容？",
-         f"今日共精选 {total} 条内容，覆盖副业项目、增长运营与赚钱心态等方向，均来自公开来源聚合，并附原文链接。"),
-        ("副业日报是什么？多久更新一次？",
-         "副业日报由 GitHub Actions 自动汇合数十个副业 / 独立开发 / 增长相关来源，每日生成一期主题日报，帮助读者快速捕捉可落地的赚钱机会与实操方法。"),
-    ]
-    rows = "".join(
-        f'<div style="margin-top:18px;">'
-        f'<h3 style="font-size:16px;font-weight:800;color:#2b2b2b;margin:0 0 6px;">{_esc(q)}</h3>'
-        f'<p style="font-size:14.5px;color:#3a3a3a;margin:0;line-height:1.8;">{_esc(a)}</p>'
-        f'</div>' for q, a in qas)
-    return (
-        f'<section style="margin-top:40px;padding-top:24px;border-top:1px solid #e6e3dd;">'
-        f'<h2 style="font-size:clamp(18px,4.6vw,20px);font-weight:800;color:#2b2b2b;margin:0 0 12px;">常见问题</h2>'
-        f'{rows}'
-        f'</section>'
-    )
-
-
-def _related_reading_html(today):
-    """相关阅读内链：指向上一期日报（零新增 URL，助爬取与权重传递）。"""
-    try:
-        last = C.load_json(os.path.join(C.STATE_DIR, "last_posted.json"), {})
-        link = last.get("link", "")
-        ldate = last.get("date", "")
-        if link and ldate and ldate != today:
-            return (
-                f'<section style="margin-top:28px;">'
-                f'<h2 style="font-size:16px;font-weight:800;color:#2b2b2b;margin:0 0 8px;">相关阅读</h2>'
-                f'<p style="margin:0;font-size:14.5px;">'
-                f'<a href="{_esc(link)}" target="_blank" rel="noopener" '
-                f'style="color:#2f6b5e;font-weight:600;text-decoration:none;">'
-                f'往期副业日报（{_esc(ldate)}）↗</a></p></section>'
-            )
-    except Exception:
-        pass
-    return ""
-
-
-def _build_jsonld(report, wp_url, cat_name, cat_link):
-    """BreadcrumbList + FAQPage 结构化数据；追加在正文之后，避开 _strip_links 的 URL 清理。"""
-    counts = {k: len(report.get("modules", {}).get(k, [])) for k, _, _ in MODULES}
-    total = sum(counts.values())
-    faq = [
-        {"q": "今天的副业日报有哪些内容模块？",
-         "a": f"分为「项目机会库 {counts['project_opportunities']} 条」「增长运营 {counts['growth_operations']} 条」「观点心法 {counts['views_insights']} 条」三大模块。"},
-        {"q": f"今天的副业日报一共精选了多少条内容？",
-         "a": f"今日共精选 {total} 条内容，覆盖副业项目、增长运营与赚钱心态等方向，均来自公开来源聚合。"},
-        {"q": "副业日报是什么？多久更新一次？",
-         "a": "副业日报由 GitHub Actions 自动汇合数十个副业/独立开发/增长相关来源，每日生成一期主题日报。"},
-    ]
-    graph = {
-        "@context": "https://schema.org",
-        "@graph": [
-            {"@type": "BreadcrumbList", "itemListElement": [
-                {"@type": "ListItem", "position": 1, "name": "首页", "item": wp_url},
-                {"@type": "ListItem", "position": 2, "name": cat_name, "item": cat_link},
-            ]},
-            {"@type": "FAQPage", "mainEntity": [
-                {"@type": "Question", "name": q["q"],
-                 "acceptedAnswer": {"@type": "Answer", "text": q["a"]}}
-                for q in faq
-            ]},
-        ]
-    }
-    return '<script type="application/ld+json">' + json.dumps(graph, ensure_ascii=False) + '</script>'
-
-
-def _append_items_store(today, report, link):
-    """把今日条目持久化到 state/items_store.jsonl（供周期主题合集 Item2 复用）。失败不影响发布。"""
-    try:
-        path = os.path.join(C.STATE_DIR, "items_store.jsonl")
-        existing = []
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            existing.append(json.loads(line))
-                        except Exception:
-                            pass
-        # 重写：先剔除今日旧条目（同日重跑不重复累积），再追加今日新条目
-        existing = [e for e in existing if e.get("date") != today]
-        for k, _, _ in MODULES:
-            for it in report.get("modules", {}).get(k, []):
-                if not isinstance(it, dict):
-                    continue
-                summary = (it.get("signal") or it.get("value_proposition")
-                           or it.get("monetization") or "")
-                summary = str(summary).strip().replace("\n", " ")[:140]
-                existing.append({
-                    "date": today,
-                    "module": k,
-                    "title": it.get("title", ""),
-                    "source_name": it.get("source_name", ""),
-                    "source_url": it.get("source_url", ""),
-                    "report_link": link,
-                    "summary": summary,
-                })
-        # 仅保留最近 60 天，控制体积（1H1G 小机友好）
-        cutoff = C.days_ago_iso(60)[:10]
-        existing = [e for e in existing if e.get("date", "") >= cutoff]
-        with open(path, "w", encoding="utf-8") as f:
-            for e in existing:
-                f.write(json.dumps(e, ensure_ascii=False) + "\n")
-        LOG.info("已写入条目持久化 store（今日 %d 条）。",
-                 sum(1 for e in existing if e.get("date") == today))
-    except Exception as e:
-        LOG.warning("条目持久化失败（不影响发布）：%s", e)
-
-
 def main():
     C.ensure_dirs()
     # 发布开关：FUYR_DISABLE_PUBLISH=1 时仅渲染不发布（用于 CNB 等副流水线，避免双 CI 同发一个 WP 造成重复/覆盖）。
@@ -564,19 +450,12 @@ def main():
         raise SystemExit("ai failed report rejected")
     total = sum(len(report.get("modules", {}).get(k, [])) for k, _, _ in MODULES)
     ds = report.get("daily_summary", {})
-    # 发布前置质量闸门：条目过少视为“太薄日报/空壳”，阻断发布并让 workflow 以非零状态失败告警，
-    # 避免某天 AI（璇玑）抽风把空壳文章推送到站点。阈值可用 FUYR_MIN_ITEMS 覆盖（默认 6）。
-    min_items = int(os.environ.get("FUYR_MIN_ITEMS", "6"))
-    if total < min_items:
-        LOG.error("日报条目过少(%d < %d)，触发发布质量闸门，不发布空壳。", total, min_items)
-        raise SystemExit(f"too thin report: {total} < {min_items}")
+    if total == 0 and not ds.get("methodology"):
+        LOG.info("今日无实质内容，跳过发布（不发布空文章）。")
+        return
 
-    # ── SEO 增强（Item1 标签+相关内链 / Item3 on-page 结构化数据）──
-    # 可见 FAQ 区块（保证 FAQPage 结构化数据对应正文真实可见，符合搜索引擎要求）
     content = render(report)
-    content += _faq_visible_section(report)
-    # 相关阅读内链：指向上一期日报（零新增 URL，助爬取与权重传递）
-    content += _related_reading_html(today)
+    title = f"副业日报 · {today}"
 
     wp_url = os.environ.get("WP_URL", "https://dajiayouxuan.com").rstrip("/")
     user = os.environ.get("WP_USER", "tougao")
@@ -589,35 +468,19 @@ def main():
     auth = {"Authorization": "Basic " + base64.b64encode(
         f"{user}:{app_pw}".encode()).decode(), "Content-Type": "application/json"}
 
-    # 解析类目 / 类目归档链接 / 模块标签（任一失败均降级，不阻断发布）
-    try:
-        cat_id = get_category_id(session, base, auth, cat_name)
-        cat_link = _category_link(session, base, auth, cat_id)
-    except Exception as e:
-        LOG.warning("类目解析失败，退回不指定类目: %s", e)
-        cat_id, cat_link = None, wp_url
-    try:
-        tag_ids = _resolve_module_tags(session, base, auth)
-    except Exception as e:
-        LOG.warning("标签解析失败，退回不挂标签: %s", e)
-        tag_ids = []
-
-    # 结构化数据 JSON-LD（BreadcrumbList + FAQPage），追加在正文之后，
-    # 避开 _strip_links 的裸 URL 清理，确保 schema 内 URL 完整不被误删。
-    content += _build_jsonld(report, wp_url, cat_name, cat_link)
-
-    title = f"副业日报 · {today}"
-    payload = {"title": title, "content": content, "status": "publish"}
-    if cat_id:
-        payload["categories"] = [cat_id]
-    if tag_ids:
-        payload["tags"] = tag_ids
-
-    existing_id, _ = find_existing_post(session, base, auth, today)
+    existing_id, existing_html = find_existing_post(session, base, auth, today)
     # 同日多次执行 → 覆盖更新同一篇文章（保持 slug/URL 不变）；无同日文章则新建。
     # 永不产生重复文章（始终按 existing_id 更新，而非新建第二篇）。
     if existing_id:
         LOG.info("检测到今日文章(%s)，用新内容覆盖更新（文章链接保持不变）。", existing_id)
+        try:
+            cat_id = get_category_id(session, base, auth, cat_name)
+        except Exception as e:
+            LOG.warning("类目解析失败，退回不指定类目: %s", e)
+            cat_id = None
+        payload = {"title": title, "content": content, "status": "publish"}
+        if cat_id:
+            payload["categories"] = [cat_id]
         r = _wp_call(session, "POST", f"{base}/wp-json/wp/v2/posts/{existing_id}",
                      auth, json_body=payload, timeout=90)
         r.raise_for_status()
@@ -625,18 +488,24 @@ def main():
         LOG.info("已更新: %s", link)
         print("PUBLISHED_URL=" + link)
         _record_posted(today, existing_id, link)
-        _append_items_store(today, report, link)
         return
 
+    try:
+        cat_id = get_category_id(session, base, auth, cat_name)
+    except Exception as e:
+        LOG.warning("类目解析失败，退回不指定类目: %s", e)
+        cat_id = None
+
+    payload = {"title": title, "content": content, "status": "publish"}
+    if cat_id:
+        payload["categories"] = [cat_id]
     r = _wp_call(session, "POST", base + "/wp-json/wp/v2/posts",
                  auth, json_body=payload, timeout=90)
     r.raise_for_status()
     link = r.json().get("link", "")
-    pid = r.json().get("id")
     LOG.info("已发布: %s", link)
     print("PUBLISHED_URL=" + link)
-    _record_posted(today, pid, link)
-    _append_items_store(today, report, link)
+    _record_posted(today, r.json().get("id"), link)
 
 
 if __name__ == "__main__":
