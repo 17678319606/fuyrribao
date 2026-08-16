@@ -74,13 +74,16 @@ jobs:
           sys.path.insert(0, "scripts")
           import common as C
           snap = C.ai_limiter.snapshot() if hasattr(C, "ai_limiter") else {}
-          p = "state/daily_report_%s.json" % C.date_str()
+          # 日报结构：report["modules"] = {模块: [条目,...]}，条数 = 各模块条目之和
+          p = os.path.join(C.STATE_DIR, "daily_report_%s.json" % C.date_str())
           n_items = 0
           if os.path.exists(p):
               try:
                   d = json.load(open(p, encoding="utf-8"))
                   if isinstance(d, dict):
-                      n_items = len(d.get("items", d.get("signals", [])))
+                      mods = d.get("modules", {})
+                      if isinstance(mods, dict):
+                          n_items = sum(len(v) for v in mods.values())
               except Exception:
                   pass
           out = {
@@ -88,8 +91,9 @@ jobs:
               "daily_report_items": n_items,
               "report_exists": os.path.exists(p),
           }
-          os.makedirs("state", exist_ok=True)
-          json.dump(out, open("state/_live_test_result.json", "w"), ensure_ascii=False, indent=2)
+          os.makedirs(C.STATE_DIR, exist_ok=True)
+          json.dump(out, open(os.path.join(C.STATE_DIR, "_live_test_result.json"), "w"),
+                    ensure_ascii=False, indent=2)
           print(json.dumps(out, ensure_ascii=False))
           PY
 
