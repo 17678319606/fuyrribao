@@ -14,7 +14,13 @@
 用法：
   python scripts/discover_sources.py                  # 例行发现（定时/手动）
   python scripts/discover_sources.py --dry-run        # 只评估不写入
-  python scripts/discover_sources.py --opml feeds.opml  # 导入 OPML 并自动评估纳入
+  python scripts/discover_sources.py --opml feeds.opml  # 额外导入某个 OPML 并自动评估纳入
+
+常驻纳源途径（无需参数，每次发现自动执行）：
+  - 仓库 seeds/*.opml（用户导出 / top-rss-list / kite-public 快照）——"策展备份池"；
+  - 两个专门收集 RSS 的 GitHub 仓库实时摄入（weekend-project-space/top-rss-list、
+    kagisearch/kite-public），best-effort，失败回落到 seeds/ 快照。
+以上候选与现有种子合并，经同一 validate+score 管线，达标且未触 SOURCE_ACTIVE_CAP 才写入。
 """
 import os
 import sys
@@ -33,6 +39,12 @@ LOG = C.get_logger()
 ACCEPT_COMPOSITE = 16          # 综合分 ≥ 16/25（略放宽，纳入高质量小众源）
 ACCEPT_MIN_DIM = 3             # 每个维度 ≥ 3（防单维劣质源混入）
 REVIEW_COMPOSITE = 12          # 12–15 仅记录待审（扩待审网，人工可捞）
+
+# 每轮校验上限：发现 workflow 硬限 30 分钟，候选常驻池（OPML+仓库）可达数百~上千，
+# 必须限制每轮实拉取校验条数，避免超时；达标写入受 SOURCE_ACTIVE_CAP 约束，
+# 未达上限的候选留待下轮渐进扩源（长跑真自动化）。
+MAX_VALIDATE_PER_RUN = 40
+SEEN_CACHE_FILE = os.path.join(C.STATE_DIR, "discovery_seen.json")
 
 # 主题相关度词表（副业/AI/独立开发/增长/创业）
 TOPIC_LEXICON = [
@@ -261,6 +273,81 @@ def parse_opml(path):
     return out
 
 
+def load_seed_opmls(opml_dir=None):
+    """常驻摄入仓库内 seeds/*.opml：OPML 即'策展备份池'，含用户提供源与 top-rss-list/kite 快照。
+    这是用户从 reeddaily/任意阅读器导出 OPML、或我们沉淀优质源列表的常态化纳源途径；
+    每次发现都会重新解析，配合 credit 自愈实现'源丰富性 + 失效自愈'。"""
+    opml_dir = opml_dir or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "seeds")
+    out = []
+    if not os.path.isdir(opml_dir):
+        return out
+    for fn in sorted(os.listdir(opml_dir)):
+        if fn.lower().endswith(".opml"):
+            out += parse_opml(os.path.join(opml_dir, fn))
+    LOG.info("seeds/ 常驻摄入 %d 个 OPML 候选", len(out))
+    return out
+
+
+def _mk_repo_candidate(url, src):
+    host = _host_of(url)
+    uid = "ghrepo_%s_%s" % (src, hashlib.md5(url.encode("utf-8")).hexdigest()[:10])
+    return {"id": uid, "type": "rss", "url": url, "name": host,
+            "rationale": "GitHub RSS 仓库(%s)实时摄入" % src, "added_by": "github-repo"}
+
+
+def load_github_rss_repos():
+    """best-effort：实时拉取两个专门收集 RSS 的仓库，作为'活体备份途径'。
+    失败不影响主流程（回落到 seeds/ 快照）。仅作扩源补充，写入仍受 cap + 评分约束。"""
+    import requests
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    out = []
+    # 1) weekend-project-space/top-rss-list：README.md 表格中的 [url](url)
+    try:
+        r = requests.get("https://api.github.com/repos/weekend-project-space/top-rss-list/contents/README.md",
+                         headers=headers, timeout=30)
+        if r.status_code == 200:
+            import base64
+            md = base64.b64decode(r.json()["content"]).decode("utf-8", "ignore")
+            for m in re.finditer(r"\]\((https?://[^)\s]+)\)", md):
+                u = m.group(1).strip()
+                if re.search(r"rss|xml|atom|feed|ifeed", u, re.I) or u.rstrip("/").endswith(".com"):
+                    out.append(_mk_repo_candidate(u, "top-rss-list"))
+    except Exception as e:
+        LOG.warning("拉取 top-rss-list 失败（回落快照）: %s", e)
+    # 2) kagisearch/kite-public：kite_feeds.json 的 feeds 数组（采样，避免过量）
+    try:
+        r = requests.get("https://api.github.com/repos/kagisearch/kite-public/contents/kite_feeds.json",
+                         headers=headers, timeout=30)
+        if r.status_code == 200:
+            import base64, random
+            data = json.loads(base64.b64decode(r.json()["content"]).decode("utf-8", "ignore"))
+            feeds = []
+            for _cat, info in data.items():
+                for u in info.get("feeds", []):
+                    if u and u.startswith("http"):
+                        feeds.append(u)
+            random.seed(20260816)
+            if len(feeds) > 60:
+                feeds = random.sample(feeds, 60)
+            for u in feeds:
+                out.append(_mk_repo_candidate(u, "kite-public"))
+    except Exception as e:
+        LOG.warning("拉取 kite-public 失败（回落快照）: %s", e)
+    seen = set()
+    dedup = []
+    for c in out:
+        if c["url"] in seen:
+            continue
+        seen.add(c["url"])
+        dedup.append(c)
+    LOG.info("GitHub RSS 仓库实时摄入 %d 个候选", len(dedup))
+    return dedup
+
+
 def _call_llm_score(url, name, sample_titles):
     """用璇玑网关对候选源做五维精评。失败返回 None（退回启发式）。"""
     import requests
@@ -344,8 +431,12 @@ def main():
     existing_hosts = {_host_of(s.get("url", "")) for s in sources}
     existing_names = {s.get("name", "").lower() for s in sources}
 
-    # 候选池 = 社区种子 + 人工策展常驻种子 + GitHub Search + (可选)OPML 导入
-    candidates = list(CANDIDATE_SEEDS) + list(CURATED_SEEDS) + github_search_candidates()
+    # 候选池 = OPML 常驻 + GitHub RSS 仓库实时 + 社区种子 + 人工策展 + GitHub Search + (可选)--opml
+    # 顺序把"新途径"（OPML/仓库）前置，确保每轮 40 条校验上限内优先扩这些新源。
+    opml_seeds = load_seed_opmls()
+    repo_seeds = load_github_rss_repos()
+    candidates = (opml_seeds + repo_seeds + github_search_candidates()
+                  + list(CANDIDATE_SEEDS) + list(CURATED_SEEDS))
     if "--opml" in sys.argv:
         try:
             opml_path = sys.argv[sys.argv.index("--opml") + 1]
@@ -355,6 +446,10 @@ def main():
     # 去重：已在 sources.json 中的跳过
     candidates = [c for c in candidates
                   if c.get("id") not in existing_ids and c.get("url") not in existing_urls]
+    # 已拒绝缓存：避免每周重复校验同一失败源浪费 CI（已接受/待审仍每轮复评）
+    seen = C.load_json(SEEN_CACHE_FILE, {})
+    rejected_seen = set(seen.get("rejected", []))
+    candidates = [c for c in candidates if c.get("url") not in rejected_seen]
 
     # 活跃源软上限守卫：active+trial 已达 SOURCE_ACTIVE_CAP 时，新源只评估不写入（防 OPML 批量溢出）
     metrics = C.load_json(C.SOURCE_METRICS_FILE, {})
@@ -363,10 +458,18 @@ def main():
 
     log = {"date": C.date_str(), "candidates": len(candidates), "accepted": [], "review": [], "rejected": []}
     added = 0
+    validated = 0
+    newly_rejected = []
     for c in candidates:
+        if validated >= MAX_VALIDATE_PER_RUN:
+            LOG.info("已达每轮校验上限 %d，剩余 %d 候选留待下轮渐进扩源",
+                     MAX_VALIDATE_PER_RUN, len(candidates) - validated)
+            break
+        validated += 1
         dims, ok, tier, reason = score_candidate(c, existing_hosts, existing_names)
         if dims is None:
             log["rejected"].append({"id": c.get("id"), "url": c.get("url"), "why": reason})
+            newly_rejected.append(c.get("url"))
             LOG.info("✗ %s 拒绝：%s", c.get("id"), reason)
             continue
         entry = {"id": c.get("id"), "url": c.get("url"), "name": c.get("name"),
@@ -393,7 +496,17 @@ def main():
             LOG.info("• %s 待审（综合 %d，%s）", c.get("id"), dims["composite"], reason)
         else:
             log["rejected"].append(entry)
+            newly_rejected.append(c.get("url"))
             LOG.info("✗ %s 拒绝（综合 %d，%s）", c.get("id"), dims["composite"], reason)
+
+    # 持久化已拒绝缓存，避免每周重复校验同一失败源浪费 CI
+    if newly_rejected:
+        seen.setdefault("rejected", [])
+        for u in newly_rejected:
+            if u and u not in seen["rejected"]:
+                seen["rejected"].append(u)
+        seen["rejected"] = seen["rejected"][-2000:]
+        C.save_json(SEEN_CACHE_FILE, seen)
 
     C.save_json(os.path.join(C.STATE_DIR, "source_discovery_log.json"), log)
     if added and not dry:

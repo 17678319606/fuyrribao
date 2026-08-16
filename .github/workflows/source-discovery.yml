@@ -70,7 +70,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add scripts/sources.json
+          git add scripts/sources.json state/discovery_seen.json
           git diff --cached --quiet || git commit -m "source: auto-discover 新增内容源 ($(TZ=Asia/Shanghai date +%F))"
           for j in 1 2 3; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
