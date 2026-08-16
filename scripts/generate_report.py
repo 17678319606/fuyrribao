@@ -1975,11 +1975,37 @@ def main():
             try:
                 _validate(report)
             except AssertionError as e:
-                LOG.error("结构校验失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
-                if gen < GEN_RETRIES:
-                    time.sleep(BACKOFF_BASE)
-                    continue
-                raise SystemExit("invalid report structure")
+                errmsg = str(e)
+                # 自愈（Problem F）：若仅因 daily_summary 缺失/被截断（璇玑流式常掐尾，
+                # daily_summary 在 JSON 尾部最易被掐），则就地补生成 daily_summary 再校验，
+                # 避免「结构校验 4 次全失败 → exit 1 → 整跑 0 产出」（run 31977948651 实锤）。
+                if "daily_summary" in errmsg and api_key:
+                    try:
+                        _ensure_daily_summary(report, base_urls, api_key, model, today)
+                        _validate(report)  # 补完后再校验一次
+                        LOG.warning("daily_summary 缺失/被掐，已就地补生成并通过结构校验（第 %d/%d 次）。",
+                                    gen, GEN_RETRIES)
+                    except AssertionError as e2:
+                        LOG.error("结构校验失败（补 daily_summary 后仍不通过，第 %d/%d 次生成）：%s",
+                                  gen, GEN_RETRIES, e2)
+                        if gen < GEN_RETRIES:
+                            time.sleep(BACKOFF_BASE); continue
+                        report = None  # 不硬崩：交由下方安全护栏跳过发布、保留线上内容
+                        break
+                    except Exception as e3:
+                        LOG.error("daily_summary 补生成异常（第 %d/%d 次）：%s", gen, GEN_RETRIES, e3)
+                        if gen < GEN_RETRIES:
+                            time.sleep(BACKOFF_BASE); continue
+                        report = None
+                        break
+                else:
+                    LOG.error("结构校验失败（第 %d/%d 次生成）：%s", gen, GEN_RETRIES, e)
+                    if gen < GEN_RETRIES:
+                        time.sleep(BACKOFF_BASE)
+                        continue
+                    # 不硬崩：结构异常也降级跳过发布，避免整跑 0 产出（与骨架/门禁一致）
+                    report = None
+                    break
             # 骨架拦截：纯标题、无字段实质内容的日报必须重生成，
             # 否则渲染后只剩标题（空字段被隐藏），用户体验极差且浪费额度。
             if _is_skeleton(report):
@@ -2140,4 +2166,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
