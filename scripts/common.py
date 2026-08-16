@@ -209,6 +209,58 @@ CREDIT_REINSTATE = 50       # 月末巡检恢复后信用 ≥ 此值且连续 2 
 CREDIT_REVIEW_OK = 25       # 月末巡检：源恢复有效 +25（封顶 100）
 CREDIT_REVIEW_FAIL = 10     # 月末巡检：仍无效 -10（地板 0）
 CREDIT_REINSTATE_STREAK = 2 # 需连续 N 次月末巡检成功才重纳（防 flapping 抖动）
+# —— 固定源晋升（信用长期优异 → 升级为 pinned/fixed，不参与淘汰轮替）——
+CREDIT_PINNED = 95          # 信用长期 ≥ 此值且运行次数达标 → 建议晋升为固定源
+SOURCE_PIN_RUNS = 60        # 晋升固定源所需最低运行次数（≈两个月稳定期，防偶发高分）
+# —— 同产品实体聚合（日报去重，减少相同产品重复展示占据策展空间）——
+ENTITY_MERGE_RATIO = 0.65   # 同实体低质量条目 ≤ 最优条 × 此比例才合并剔除（防误杀）
+# 通用基建/渠道类词：仅作为工具被提及，不应触发"同产品聚合"（否则两篇不同副业都提
+# GitHub 会被误并）。仅当实体是条目"主语"（出现在标题）时才参与聚合。
+ENTITY_EXCLUDE = {
+    "github", "gitlab", "wordpress", "woocommerce", "shopify", "telegram",
+    "youtube", "notion", "figma", "canva", "capcut", "剪映", "tiktok",
+    "wechat", "微信", "whatsapp", "slack", "discord", "zoom", "gmail",
+}
+
+# —— 聚合源（aggregator）识别：一手内容由本源二次策展，必须携带原文引用 ——
+# 按源 id 精确匹配；同时兼容 AI 自由写回的中文别名（写"中年指南"也不漏配）。
+AGGREGATOR_SOURCE_IDS = {"zhongnianren"}
+AGGREGATOR_NAME_ALIASES = {
+    "zhongnianren", "中年指南", "中年人", "中年指南pro", "zhongnianrenpro",
+}
+
+# —— 信用分放宽 / 固定源晋升细化阈值（R4 审计落地）——
+CREDIT_RELAX = 85            # 信用 ≥ 此值 → 该活跃源采集 cap 上浮 SOURCE_CAP_RELAX 倍（放宽内容量）
+SOURCE_CAP_RELAX = 1.2       # 放宽倍率（封顶 SOURCE_CAP_MAX，避免单一源垄断）
+SOURCE_PIN_RELEVANCE = 0.8   # 晋升固定源还需战略相关度 ≥ 此值（防低质/低相关源锁死固定高配额）
+
+# —— 固定基础源（地基）：用户指定，永远参与候选、永不淘汰，保障内容不空 ——
+# ① zhongnianren（中年指南）：独特观点源；原 worker 分享改为镜像 RSS，观点性内容、全文引用居多；
+# ② cid（中文独立开发者）：https://github.com/1c7/chinese-independent-developer 主题强契合。
+# 二者是"基础最低质量"的地基；其余源走动态信用生命周期（trial/active/pinned/retired）。
+FIXED_BASE_SOURCE_IDS = {"zhongnianren", "cid"}
+FIXED_BASE_SOURCE_NAMES = {"中年指南", "中文独立开发者", "zhongnianren", "cid"}
+FIXED_FOUNDATION_FLOOR = 6   # 地基兜底：最终日报至少含 N 条；不足则从固定基础源候选补位（防空/防过度稀疏）
+
+
+def is_fixed_base_source(src):
+    """判断来源是否为『固定基础源』（地基，永不淘汰，保障内容不空）。兼容 id 与名称。"""
+    if not src:
+        return False
+    s = (src or "").strip()
+    if s in FIXED_BASE_SOURCE_IDS:
+        return True
+    return s in FIXED_BASE_SOURCE_NAMES
+
+
+def is_aggregator_source(src):
+    """判断一条目来源是否为聚合源（须强制原文引用）。兼容源 id 与中文别名。"""
+    if not src:
+        return False
+    s = (src or "").strip().lower().replace(" ", "")
+    if s in AGGREGATOR_SOURCE_IDS:
+        return True
+    return any(a in s for a in AGGREGATOR_NAME_ALIASES)
 # 四维权重（相关 / 稳定 / 产量 / 质量），和为 1
 SOURCE_SCORE_WEIGHTS = (0.30, 0.25, 0.20, 0.25)
 SOURCE_YIELD_REF = 20       # 单源日均有效候选参考值（达到即产量维满分）

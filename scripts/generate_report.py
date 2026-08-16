@@ -156,8 +156,23 @@ def _prefilter_signals(signals):
         ):
             continue
         out.append(s)
-    LOG.info("免费预筛：%d → %d（去重+丢桩，含标题归一化去重）", len(signals), len(out))
-    return out
+    # 实质含量门禁（AI 前，零成本）：拦掉最 unambiguous 的废经验——纯新闻复述 + 标题吹实测但无数字。
+    # 注意：空洞 How-to 与"观点模块弱内容"在此阶段不拦（原始信号字段尚薄，避免误杀待 AI 丰富的好内容），
+    # 交由生成后 _substance_check 在全字段富文本上统一裁决。
+    gated = []
+    for s in out:
+        try:
+            r = score.substance_classify(s, module=None)
+            if r["drop"] and (any(x.startswith("新闻") for x in r["reasons"])
+                              or any("实测" in x for x in r["reasons"])):
+                LOG.info("【实质门禁·预筛】丢弃新闻复述/虚假实测信号: %s | %s",
+                          (s.get("title") or "")[:50], r["reasons"])
+                continue
+        except Exception:
+            pass
+        gated.append(s)
+    LOG.info("免费预筛：%d → %d（去重+丢桩+实质门禁，含标题归一化去重）", len(signals), len(gated))
+    return gated
 
 
 def _is_valid_proxy(p):
@@ -914,8 +929,9 @@ def _validate(report):
                 LOG.warning("模块 %s 第 %d 条为字符串（非对象），已清洗为标题卡片", key, idx)
                 cleaned.append({"title": it[:200], "source_name": "",
                                 "source_url": "", "signal": ""})
-        else:
-            LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
+            else:
+                # 既非 dict 也非 str：真实异常类型，跳过该条并告警（不污染正常条目日志）
+                LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
         if len(cleaned) > C.MAX_ITEMS_PER_MODULE:
             LOG.info("模块 %s 条目 %d 超出每模块上限 %d，截断至上限",
                      key, len(cleaned), C.MAX_ITEMS_PER_MODULE)
@@ -1018,6 +1034,44 @@ def _actionable_check(report):
     return report, removed
 
 
+def _substance_check(report):
+    """生成后实质含量门禁（v5.0）：扫描所有模块，剔除"无数据经验主义 + 新闻通告"类废条目。
+
+    与 _actionable_check（结构性空心）互补——本函数专盯"字段填了但语义空洞"的内容：
+      - 观点心法模块缺实质锚点（无数字/无案例/无具体框架）的纯主观心法；
+      - 标题吹实测/实战但无数字结果；
+      - 标题含如何/怎么/为何却无数据无框架的空洞 How-to；
+      - 行业新闻纯复述（推出/上线/涨价/联手 + 实体 + 无分析角度）。
+    返回 (cleaned_report, removed_count)。非阻塞：异常不影响发布。
+    """
+    removed = 0
+    mods = report.get("modules", {})
+    for key in C.MODULES:
+        items = mods.get(key, [])
+        if not items:
+            continue
+        keep = []
+        for it in items:
+            try:
+                # 聚合源(zhongnianren)的人情味观点豁免"观点模块弱内容"拦截，
+                # 避免"去 AI 味"被质量门反噬（新闻复述/虚假实测/空洞 How-to 仍拦截）。
+                exempt_views = C.is_aggregator_source(it.get("source_name"))
+                r = score.substance_classify(it, module=key, exempt_views=exempt_views)
+            except Exception:
+                r = None
+            if r and r["drop"]:
+                removed += 1
+                LOG.warning("【实质门禁】[%s] 剔除 | 原因=%s | 标题: %s",
+                            key, ";".join(r["reasons"]), (it.get("title") or "")[:60])
+            else:
+                keep.append(it)
+        mods[key] = keep
+    if removed > 0:
+        LOG.warning("【实质含量门禁】共剔除 %d 条废经验/新闻通告，剩余 %d 条",
+                    removed, sum(len(m) for m in mods.values()))
+    return report, removed
+
+
 # —— 同玩法 / 同地域服务聚类去重（v4.3，L3 保险）——
 # 目的：拦截"同一套玩法（相同服务品类 + 相同地域市场）在同一模块里重复堆砌≥3条"的冗余，
 # 如"武汉 SEO/GEO 三连"。同时严格"地域中性"：单条地域内容（地域=获客渠道/目标客户定位）
@@ -1074,6 +1128,238 @@ def _detect_service(text):
         if s.lower() in tl:
             return _SERVICE_MAP[s]
     return ""
+
+
+# ─────────────────────────────────────────────────────────────────────
+# R2 同产品实体聚合（跨模块去重，减少相同产品重复展示占据策展空间）
+# ─────────────────────────────────────────────────────────────────────
+# 仅对「已知高置信品牌/产品」触发聚合，避免把普通大写词误当实体导致误杀。
+_ENTITY_KNOWN = {
+    # AI / 工具类
+    "deepseek", "cursor", "claude", "gpt", "chatgpt", "gemini", "copilot",
+    "midjourney", "suno", "perplexity", "kimi", "qwen", "doubao", "豆包",
+    "kling", "runway", "notion", "figma", "github", "producthunt", "telegram",
+    "youtube", "wordpress", "woocommerce", "shopify", "tiktok",
+    # 中文平台 / 社区
+    "小红书", "抖音", "视频号", "公众号", "知乎", "b站", "闲鱼", "拼多多",
+    "淘宝", "京东", "美团", "饿了么", "滴滴", "快手", "稀土掘金", "少数派",
+    "即刻", "得到", "生财有术",
+    # 副业 / 赚钱相关产品
+    "moneybuddy", "saathi", "patreon", "substack", "onlyfans", "etsy",
+    "fiverr", "upwork", "canva", "capcut", "剪映",
+}
+_ENTITY_BRAND_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9.+]{1,20})\b")
+_ENTITY_CN_RE = re.compile(r"([\u4e00-\u9fff]{2,8}(?:app|小程序|pro|会员|平台|版))", re.IGNORECASE)
+
+
+def _extract_entities(text):
+    """抽取高置信品牌/产品实体集合（小写）。"""
+    if not text:
+        return set()
+    tl = text.lower()
+    found = set()
+    for brand in _ENTITY_KNOWN:
+        if brand in tl:
+            found.add(brand)
+    for m in _ENTITY_BRAND_RE.findall(text):
+        ml = m.lower()
+        if ml in _ENTITY_KNOWN:
+            found.add(ml)
+    for m in _ENTITY_CN_RE.findall(text):
+        found.add(m.lower())
+    return found
+
+
+def _entity_quality(it):
+    """同实体内排序的质量代理：优先字段丰富度，其次文本长度。
+    日报逐条 7 维分在末段才计算（shadow），此处用画布字段丰富度 + 文本量作代理。"""
+    if not isinstance(it, dict):
+        return 0.0
+    filled = sum(1 for k in _CANVAS_KEYS if it.get(k) and str(it.get(k)).strip())
+    text_len = len(_item_text(it))
+    return filled * 10.0 + min(text_len, 2000) / 100.0
+
+
+def _entity_aggregate(report):
+    """同产品聚合：跨模块抽取品牌/产品实体，同实体多条目仅保留最优表述，
+    其余低质量者合并剔除（减少重复展示）；中高质量者仅打 _same_entity 标记，
+    交 R3 AI 末轮巡检裁决，避免误杀。返回 (report, removed)。
+
+    防误杀收紧（R4 审计）：
+    - 仅用「标题实体」分组：实体须在 ≥2 条目标题出现才视为"同一产品被多次报道"，
+      正文随手提及（如"用 GitHub 做 X"）不触发聚合，避免两篇不同副业被误并。
+    - 排除通用基建/渠道词（GitHub/WordPress 等，见 C.ENTITY_EXCLUDE），
+      这些是被当作工具提及，而非被策展的"产品"。
+    """
+    removed = 0
+    mods = report.get("modules", {})
+    all_items = []
+    for mod in C.MODULES:
+        for i, it in enumerate(mods.get(mod, [])):
+            all_items.append((mod, i, it))
+
+    def _title_entities(it):
+        title = (it.get("title") or "")
+        ents = set()
+        tl = title.lower()
+        for brand in _ENTITY_KNOWN:
+            if brand in tl:
+                ents.add(brand)
+        for m in _ENTITY_BRAND_RE.findall(title):
+            if m.lower() in _ENTITY_KNOWN:
+                ents.add(m.lower())
+        for m in _ENTITY_CN_RE.findall(title):
+            ents.add(m.lower())
+        return ents - C.ENTITY_EXCLUDE
+
+    groups = {}
+    for mod, i, it in all_items:
+        for e in _title_entities(it):
+            groups.setdefault(e, []).append((mod, i, it))
+
+    drop = set()
+    for ent, members in groups.items():
+        if len(members) < 2:
+            continue
+        ranked = sorted(members, key=lambda x: _entity_quality(x[2]), reverse=True)
+        best = ranked[0]
+        best_q = _entity_quality(best[2])
+        for mod, i, it in ranked[1:]:
+            q = _entity_quality(it)
+            if best_q > 0 and q <= best_q * C.ENTITY_MERGE_RATIO:
+                drop.add((mod, i))
+                removed += 1
+                LOG.warning("【同产品聚合剔除】实体=%s 低质量条(字段%d/%d字)合并入最优 | 标题: %s",
+                            ent, sum(1 for k in _CANVAS_KEYS if it.get(k)),
+                            len(_item_text(it)), (it.get("title") or "")[:50])
+            else:
+                # 中高质量但同实体：标记，交 R3 巡检裁决，不在此硬删
+                it.setdefault("_same_entity", []).append(ent)
+
+    for mod in C.MODULES:
+        drop_idxs = {i for m, i in drop if m == mod}
+        if drop_idxs:
+            items = mods.get(mod, [])
+            mods[mod] = [it for i, it in enumerate(items) if i not in drop_idxs]
+    return report, removed
+
+
+def _ai_inspect_prompt():
+    return (
+        "你是内容终审巡检员。下面是一批已生成的『副业日报』候选条目（JSON）。"
+        "请做最后一道去重/去无价值/去套路巡检：\n"
+        "1) 去重：内容实质高度重复（同一产品/玩法/观点换说法）只保留一条，列出其余要剔除的 id；\n"
+        "2) 去无价值：仍是『无数据经验主义/新闻通告/正确废话/纯第三人称描述』的条目 id；\n"
+        "3) 去套路：明显 AI 味（空泛总结、套话、无任何具体摩擦）的条目 id。\n"
+        "返回 JSON：{\"drop_ids\":[...],\"keep_ids\":[...],\"note\":\"一句话总评\"}。"
+        "只输出你判断要剔除的 id，宁可少剔不要误杀。"
+    )
+
+
+def _ensure_foundation_floor(report, new_signals):
+    """地基兜底（R5）：最终日报条数低于 FIXED_FOUNDATION_FLOOR 时，
+    从『固定基础源』候选信号里补位，保障内容不空、且地基源始终有代表性。
+    - 仅补未被已选条目覆盖的地基源信号；
+    - 仅做结构校验（标题非空/长度≥阈值），不绕过实质门禁（地基源本已豁免观点弱拦截）；
+    - 上限到 floor，绝不超 hard cap（调用方 cap_modules 已封顶）；失败不阻断。"""
+    try:
+        mods = report.setdefault("modules", {})
+        total = sum(len(mods.get(k, [])) for k in C.MODULES)
+        floor = C.FIXED_FOUNDATION_FLOOR
+        if total >= floor:
+            return report, 0
+        # 已选标题集合，避免重复补入
+        selected_titles = {(_item_text(it) or "").strip()
+                           for it in sum((mods.get(k, []) for k in C.MODULES), [])}
+        added = 0
+        for sig in (new_signals or []):
+            if total + added >= floor:
+                break
+            name = sig.get("source_name", "")
+            if not C.is_fixed_base_source(name):
+                continue
+            title = (sig.get("title") or "").strip()
+            if not title or len(title) < 4:
+                continue
+            if title in selected_titles:
+                continue
+            # 按源归类投放模块（回退到首个可用模块，绝不让 KeyError 崩溃）
+            if C.is_aggregator_source(name):
+                mod = "views_insights"
+            elif name in ("中文独立开发者", "cid"):
+                mod = "project_opportunities"
+            else:
+                mod = C.MODULES[0]
+            if mod not in C.MODULES:
+                mod = C.MODULES[0]
+            item = {
+                "title": title,
+                "source_name": name,
+                "source_url": sig.get("source_url") or sig.get("url") or "",
+                "signal": sig.get("content") or sig.get("signal") or "",
+                "_foundation_topup": True,
+            }
+            mods.setdefault(mod, []).append(item)
+            selected_titles.add(title)
+            added += 1
+            LOG.warning("【地基兜底】补位固定基础源 %s 条目：%s", name, title[:40])
+        if added:
+            LOG.warning("【地基兜底】最终补足 %d 条固定基础源条目（地基保障内容不空）", added)
+        return report, added
+    except Exception as e:
+        LOG.warning("地基兜底异常（不阻断）: %s", e)
+        return report, 0
+
+
+def _ai_inspect(report):
+    """R3 AI 末轮分段巡检：逐模块送 AI 终审，剔除残留重复/无价值/套路条目。
+    分段（每模块独立）控制上下文 ≤30k tokens；默认关闭(FUYR_AI_INSPECT=1)，失败不阻断。"""
+    if os.environ.get("FUYR_AI_INSPECT", "").strip() not in ("1", "true", "True", "yes"):
+        return report, 0
+    try:
+        # 复用主流程的端点解析（兼容 AI_BASE_URL / ai_base_url / AI_BASE_URL_POOL），
+        # 避免旧代码读 AI_BASE_URLS(复数)导致只配主端点时巡检静默失效。
+        base_urls = _parse_base_urls()
+        api_key = os.environ.get("AI_API_KEY", "")
+        model = os.environ.get("AI_MODEL", "")
+        if not (base_urls and api_key):
+            LOG.warning("AI 末轮巡检跳过：缺少 AI_API_KEY 或可用端点")
+            return report, 0
+        mods = report.get("modules", {})
+        drop = set()
+        notes = []
+        for mod in C.MODULES:
+            items = mods.get(mod, [])
+            if len(items) < 2:
+                continue
+            batch = [{"id": it.get("id") or ("%s#%d" % (mod, i)),
+                      "title": it.get("title", ""),
+                      "text": _item_text(it)[:600]}
+                     for i, it in enumerate(items)]
+            user = "模块=%s，条目：\n```json\n%s\n```" % (mod, json.dumps(batch, ensure_ascii=False))
+            try:
+                content = _call_ai(base_urls, api_key, model, _ai_inspect_prompt(), user, stream=False)
+                data = _extract_json(content) or {}
+                notes.append(data.get("note", ""))
+                id2idx = {b["id"]: i for i, b in enumerate(batch)}
+                for did in (data.get("drop_ids") or []):
+                    if did in id2idx:
+                        drop.add((mod, id2idx[did]))
+            except Exception as e:
+                LOG.warning("AI 巡检模块 %s 失败（不阻断）: %s", mod, e)
+        removed = 0
+        for mod in C.MODULES:
+            drop_idxs = {i for m, i in drop if m == mod}
+            if drop_idxs:
+                items = mods.get(mod, [])
+                mods[mod] = [it for i, it in enumerate(items) if i not in drop_idxs]
+                removed += len(drop_idxs)
+        if removed:
+            LOG.warning("【AI 末轮巡检】剔除残留 %d 条 | %s", removed, "；".join(notes)[:200])
+        return report, removed
+    except Exception as e:
+        LOG.warning("AI 末轮巡检整体跳过（不阻断）: %s", e)
+        return report, 0
 
 
 def _cluster_dedup(report, min_cluster=3, keep=1):
@@ -1682,6 +1968,18 @@ def main():
                 LOG.warning("新增批次全被剔除为空心，跳过该批次（保留已累积 %d 条）。", acc_total)
                 report = None
                 break
+            # v5.0 实质含量门禁：剔除"无数据经验主义 + 新闻通告"类废条目（观点模块重灾区）
+            report, sub_removed = _substance_check(report)
+            if sub_removed > 0 and sum(len(report.get("modules", {}).get(k, [])) for k in C.MODULES) == 0:
+                LOG.error("实质门禁后所有条目被剔除，第 %d/%d 次生成将重生成", gen, GEN_RETRIES)
+                if gen < GEN_RETRIES:
+                    time.sleep(BACKOFF_BASE)
+                    continue
+                if acc_total == 0:
+                    raise SystemExit("all items removed by substance gate")
+                LOG.warning("新增批次全被实质门禁剔除，跳过该批次（保留已累积 %d 条）。", acc_total)
+                report = None
+                break
             # v4.3 L3：同玩法/同地域服务聚类去重（地域中性，仅同模块+同地域+同服务≥3才收口）
             report, cluster_removed = _cluster_dedup(report)
             if cluster_removed > 0:
@@ -1690,6 +1988,10 @@ def main():
             report, title_removed = _title_dedup_report(report)
             if title_removed > 0:
                 LOG.warning("【标题去重】剔除 %d 条重复/高度相似条目", title_removed)
+            # R2 同产品实体聚合：跨模块同品牌/产品仅留最优表述，低质量重复合并剔除
+            report, entity_removed = _entity_aggregate(report)
+            if entity_removed > 0:
+                LOG.warning("【同产品聚合】剔除 %d 条相同产品低质量重复表述", entity_removed)
             total = sum(len(report.get("modules", {}).get(k, [])) for k in C.MODULES)
             if total == 0 and len(new_signals) > 0:
                 LOG.warning("AI 返回 0 条但候选信号有 %d 条（疑似空生成），重生成（%d/%d）",
@@ -1739,6 +2041,17 @@ def main():
     report, final_dups = _title_dedup_report(report)
     if final_dups:
         LOG.warning("【累积去重】清除历史/合并残留重复条目 %d 条", final_dups)
+
+    # R3 AI 末轮分段巡检：默认关闭(FUYR_AI_INSPECT=1)，逐模块剔除残留重复/无价值/套路；
+    # 失败不阻断，仅作最后一道质量兜底。
+    report, inspect_removed = _ai_inspect(report)
+    if inspect_removed > 0:
+        LOG.warning("【AI 末轮巡检】剔除残留 %d 条", inspect_removed)
+
+    # R5 地基兜底：最终条数过低时从固定基础源候选补位，保障内容不空
+    report, floor_added = _ensure_foundation_floor(report, new_signals)
+    if floor_added > 0:
+        LOG.warning("【地基兜底】最终补位 %d 条固定基础源条目", floor_added)
 
     # 写回累积状态 & 当日报告
     C.save_json(daily_state_path, report)

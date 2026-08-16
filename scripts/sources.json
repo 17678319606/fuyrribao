@@ -7,7 +7,8 @@
     "microblog": true,
     "pinned": true,
     "quota": "pinned",
-    "rationale": "固定主用源：副业/赚钱/省钱观点性内容核心源，不参与轮替淘汰。优秀内容原文全文引用。"
+    "fixed": true,
+    "rationale": "固定基础源(地基)：副业/赚钱/省钱独特观点核心源，不参与轮替淘汰。原 worker 分享改为镜像 RSS，观点性内容、全文引用居多，保障内容不空。"
   },
   {
     "id": "cid",
@@ -15,7 +16,11 @@
     "url": "https://raw.githubusercontent.com/1c7/chinese-independent-developer/master/README.md",
     "name": "中文独立开发者",
     "anchor": "https://github.com/1c7/chinese-independent-developer",
-    "snapshot": "state/cid_readme_snapshot.txt"
+    "snapshot": "state/cid_readme_snapshot.txt",
+    "pinned": true,
+    "quota": "pinned",
+    "fixed": true,
+    "rationale": "固定基础源(地基)：中文独立开发者产品库，主题强契合，保障内容不空。"
   },
   { "id": "v2ex", "type": "rss", "url": "https://www.v2ex.com/index.xml", "name": "V2EX" },
   { "id": "sspai", "type": "rss", "url": "https://sspai.com/feed", "name": "少数派" },

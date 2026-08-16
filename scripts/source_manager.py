@@ -148,6 +148,44 @@ def _relevance_for(s, metrics):
     return C.heuristic_relevance(s.get("name", ""), s.get("url", ""))
 
 
+def ensure_fixed_base_sources(sources):
+    """地基保障（R5）：幂等确保固定基础源（用户指定）始终存在且 pinned+fixed。
+
+    - 已存在 → 强制 pinned=True, fixed=True（防止配置遗漏导致地基源被动态算法淘汰/饿死）；
+    - 缺失 → 注入默认条目（含已知镜像 RSS / GitHub 地址），永不依赖外部配置完整性。
+    返回（可能新增后的）源列表。默认不写回磁盘（避免误覆盖部署 sources.json），
+    仅保证本次运行的内存态正确；配置侧应在 sources.json 同步打 fixed 标记。
+    """
+    by_id = {s.get("id") for s in sources}
+    out = list(sources)
+    DEFAULTS = {
+        "zhongnianren": {"id": "zhongnianren", "type": "rss",
+                          "url": "https://17678319606.github.io/tg-aggregator-cn-snapshot/zhongnianren/rss.xml",
+                          "name": "中年指南", "microblog": True,
+                          "rationale": "固定基础源：副业/赚钱/省钱独特观点核心源"},
+        "cid": {"id": "cid", "type": "github_readme_diff",
+                "url": "https://raw.githubusercontent.com/1c7/chinese-independent-developer/master/README.md",
+                "name": "中文独立开发者",
+                "anchor": "https://github.com/1c7/chinese-independent-developer",
+                "snapshot": "state/cid_readme_snapshot.txt",
+                "rationale": "固定基础源：中文独立开发者产品库，主题强契合"},
+    }
+    for sid in C.FIXED_BASE_SOURCE_IDS:
+        if sid in by_id:
+            for s in out:
+                if s.get("id") == sid:
+                    # 强制地基属性（配置即使遗漏也兜底）
+                    s["pinned"] = True
+                    s["fixed"] = True
+        else:
+            d = dict(DEFAULTS.get(sid, {"id": sid, "type": "rss", "url": "", "name": sid}))
+            d["pinned"] = True
+            d["fixed"] = True
+            out.append(d)
+            LOG.warning("⚠ 地基源 %s 缺失，已注入默认条目（建议同步更新 sources.json）", sid)
+    return out
+
+
 def allocate_caps(sources, metrics=None):
     """按综合分把总预算加权分配给每源 cap。返回 dict id->cap。
 
@@ -158,6 +196,7 @@ def allocate_caps(sources, metrics=None):
     - 最终所有 cap 之和不超过 MAX_CANDIDATES（硬上限兜底）
     """
     metrics = metrics or _load_metrics()
+    sources = ensure_fixed_base_sources(sources)
     rel_map = {s.get("id"): _relevance_for(s, metrics) for s in sources}
     caps = {}
 
@@ -186,7 +225,12 @@ def allocate_caps(sources, metrics=None):
             sid = s.get("id")
             w = max(1.0, scores[sid])
             cap = round(C.SOURCE_CAP_BUDGET * w / total_w)
-            caps[sid] = max(C.SOURCE_CAP_MIN, min(C.SOURCE_CAP_MAX, cap))
+            cap = max(C.SOURCE_CAP_MIN, min(C.SOURCE_CAP_MAX, cap))
+            # 信用长期优异 → 放宽内容量（cap 上浮），体现"动态变化算法提升源丰富性"。
+            # 仅对活跃优质源生效，且封顶 SOURCE_CAP_MAX 防止单一源垄断候选池。
+            if metrics.get(sid, {}).get("credit", C.CREDIT_INIT) >= C.CREDIT_RELAX:
+                cap = min(C.SOURCE_CAP_MAX, round(cap * C.SOURCE_CAP_RELAX))
+            caps[sid] = cap
 
     ssum = sum(caps.values())
     if ssum > C.MAX_CANDIDATES:
@@ -199,14 +243,15 @@ def allocate_caps(sources, metrics=None):
 def recommend_actions(sources, metrics=None):
     """扫描死源 / 观测期毕业，产出动作建议（写入审计文件，不落地）。"""
     metrics = metrics or _load_metrics()
+    sources = ensure_fixed_base_sources(sources)
     rel_map = {s.get("id"): _relevance_for(s, metrics) for s in sources}
     actions = []
     dead_ids = set()
     today = C.beijing_now()
     for s in sources:
         sid = s.get("id")
-        # Pinned 源永不淘汰/轮替
-        if s.get("pinned"):
+        # 固定基础源（pinned/fixed）永不淘汰/轮替——地基保障
+        if s.get("pinned") or s.get("fixed"):
             continue
         m = metrics.get(sid, {})
         if m.get("status") == "retired":
@@ -253,6 +298,25 @@ def recommend_actions(sources, metrics=None):
             else:
                 actions.append({"type": "retire", "id": sid, "reason": "trial_failed",
                                 "eval_score": eval_score, "fetch_ok_rate": round(fetch_ok_rate, 2)})
+
+    # —— 固定源晋升：信用长期优异 + 运行稳定 → 建议晋升为 fixed(pinned) ——
+    # pinned 源不参与淘汰轮替、固定最高配额，是「基础源」的终态。
+    for s in sources:
+        sid = s.get("id")
+        if s.get("pinned") or s.get("fixed"):
+            continue
+        m = metrics.get(sid, {})
+        ft = m.get("fetch_total", 0)
+        ok_rate = (m.get("fetch_ok", 0) / ft) if ft else 0.0
+        if (m.get("status") in ("active", "legacy")
+                and (m.get("credit", C.CREDIT_INIT)) >= C.CREDIT_PINNED
+                and m.get("runs", 0) >= C.SOURCE_PIN_RUNS
+                and ok_rate >= C.SOURCE_MIN_FETCH_OK
+                and rel_map.get(sid, 0.0) >= C.SOURCE_PIN_RELEVANCE):
+            actions.append({"type": "pin", "id": sid,
+                            "reason": "credit>=%d & runs>=%d & ok>=%.2f & rel>=%.2f" % (
+                                C.CREDIT_PINNED, C.SOURCE_PIN_RUNS,
+                                C.SOURCE_MIN_FETCH_OK, C.SOURCE_PIN_RELEVANCE)})
     _save_actions(actions)
     return actions
 
@@ -271,8 +335,11 @@ def apply_actions(sources, actions, automate=False):
         e = dict(s)
         e.setdefault("status", "active")
         if sid in retired_ids:
-            e["status"] = "retired"
-            e["retired_at"] = C.date_str()
+            if e.get("fixed"):
+                LOG.warning("地基源 %s 受保护，跳过淘汰（不参与 retired 轮替）", sid)
+            else:
+                e["status"] = "retired"
+                e["retired_at"] = C.date_str()
         for a in actions:
             if a["type"] == "promote_replace" and a["id"] == sid:
                 e["status"] = "active"
@@ -285,6 +352,10 @@ def apply_actions(sources, actions, automate=False):
             if a["type"] == "promote" and a["id"] == sid:
                 e["status"] = "active"
                 e["promoted_at"] = C.date_str()
+            if a["type"] == "pin" and a["id"] == sid:
+                e["status"] = "active"
+                e["pinned"] = True
+                e["pinned_at"] = C.date_str()
         out.append(e)
     C.save_json(C.SOURCES_FILE, out)
     LOG.info("已落地源动作 %d 项（含 retired 备份）", len(actions))
@@ -387,6 +458,11 @@ def maybe_automate(sources):
         if actions:
             LOG.info("源动作建议 %d 项（未落地，设 FUYR_SOURCE_AUTOMATION=1 启用）: %s",
                      len(actions), [a["type"] + ":" + a["id"] for a in actions])
+    # 纳新触发：每次运行都基于多样性体检产出候选源建议（仅审计，不自动写入 sources.json）
+    try:
+        scout_new_sources(sources)
+    except Exception as e:
+        LOG.warning("纳新触发跳过（不影响主流程）: %s", e)
     return actions
 
 
@@ -432,6 +508,68 @@ def diversity_report(sources, metrics=None):
     return report
 
 
+def scout_new_sources(sources, metrics=None):
+    """R2 纳新触发：基于多样性体检，当存在垄断风险或仍有扩源余量时，
+    产出『建议引入』的候选源清单（trial），写入 state/source_scout.json 审计。
+    候选仅作"待人工/校验器审核"建议，绝不自动写入 sources.json（未校验源直接入池是 bug）。
+    幂等：已建议过且尚未入源的候选不再重复举荐，避免每轮刷相同硬编码种子。"""
+    metrics = metrics or _load_metrics()
+    rep = diversity_report(sources, metrics)
+    if not (rep.get("monopoly_risk") or rep.get("cap_headroom", 0) > 0):
+        C.save_json(os.path.join(C.STATE_DIR, "source_scout.json"),
+                    {"date": C.date_str(), "scouted": False, "reason": "diversity_ok"})
+        return []
+    # 主题相关候选种子池（副业/赚钱/增长/AI 工具类高质量公开源）；仅作建议，需校验后入源。
+    SEED_POOL = [
+        {"id": "scout_indiehackers", "name": "Indie Hackers", "type": "rss",
+         "url": "https://www.indiehackers.com/feed"},
+        {"id": "scout_hackernews", "name": "Hacker News", "type": "rss",
+         "url": "https://news.ycombinator.com/rss"},
+        {"id": "scout_producthunt", "name": "Product Hunt", "type": "rss",
+         "url": "https://www.producthunt.com/feed"},
+        {"id": "scout_ycombinator", "name": "Y Combinator Blog", "type": "rss",
+         "url": "https://www.ycombinator.com/blog/rss.xml"},
+        {"id": "scout_saastr", "name": "SaaStr", "type": "rss",
+         "url": "https://www.saastr.com/feed/"},
+    ]
+    existing_ids = {s.get("id") for s in sources}
+    # 幂等：读取历史已建议 id，避免重复刷相同种子
+    hist_path = os.path.join(C.STATE_DIR, "source_scout.json")
+    suggested_before = set()
+    try:
+        _h = C.load_json(hist_path) or {}
+        suggested_before = set(_h.get("suggested_history", []))
+    except Exception:
+        pass
+    cands = [c for c in SEED_POOL
+             if c["id"] not in existing_ids and c["id"] not in suggested_before]
+    validated = []
+    try:
+        import discover_sources as D
+        for c in cands:
+            try:
+                ok, _, _t = D.validate_source(c)
+                if ok:
+                    validated.append(c)
+            except Exception:
+                pass
+    except Exception:
+        # 无校验器：列出为"建议"，但明确标记 needs_validation，交由人工/后续校验器审核。
+        validated = [{**c, "needs_validation": True} for c in cands]
+    out = {"date": C.date_str(), "scouted": True,
+           "monopoly_risk": rep.get("monopoly_risk"),
+           "cap_headroom": rep.get("cap_headroom"),
+           "candidates": validated,
+           "suggested_history": sorted(suggested_before | {c["id"] for c in cands})}
+    C.save_json(hist_path, out)
+    if validated:
+        LOG.info("📡 纳新触发：建议引入 %d 个候选源(待校验/trial，未自动入池): %s",
+                 len(validated), [c["id"] for c in validated])
+    else:
+        LOG.info("📡 纳新触发但无可新增候选（已建议过的不再重复举荐）")
+    return out
+
+
 def main():
     C.ensure_dirs()
     sources = C.load_json(C.SOURCES_FILE, [])
@@ -468,8 +606,11 @@ def main():
     elif cmd == "diversity":
         rep = diversity_report(sources)
         print(json.dumps(rep, ensure_ascii=False, indent=2))
+    elif cmd == "scout":
+        out = scout_new_sources(sources)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
-        print("用法: python source_manager.py [status|caps|recommend|apply|review-retired [--apply]|diversity]")
+        print("用法: python source_manager.py [status|caps|recommend|apply|review-retired [--apply]|diversity|scout]")
 
 
 if __name__ == "__main__":
