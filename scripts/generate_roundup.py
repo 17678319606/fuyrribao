@@ -316,10 +316,58 @@ def _call_ai(system, user):
 
 
 def _extract_json(text):
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
+    """从模型输出抠出 JSON（兼容 ``` 围栏 / 前后废话 / 截断）。
+
+    原先的 r'\\{.*\\}' 贪婪匹配在遇到围栏或尾随文字时会把多余内容一起塞进
+    json.loads，触发 'Extra data' 导致整期周报合成失败。这里改为：剥离代码
+    围栏 → 从首个 { 扫描到与之配平的 }（尊重字符串内引号/转义）→ 优先解析该
+    完整对象；未闭合时退而求其次截到最后一个 }。与日报侧 _extract_json 对齐。"""
+    if not text:
+        raise ValueError("AI 未返回内容")
+    s = text.strip()
+    if "```" in s:  # 剥离任意语言标记围栏（```json / ```python / 裸 ```）
+        s = re.sub(r"```[a-zA-Z]*\s*", "", s, flags=re.I)
+        s = s.replace("```", "")
+    s = s.strip()
+    start = s.find("{")
+    if start == -1:
         raise ValueError("AI 未返回 JSON")
-    return json.loads(m.group(0))
+    depth = 0
+    in_str = False
+    esc = False
+    end = -1
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:  # 未闭合：退而求其次截到最后一个 }
+        last = s.rfind("}")
+        if last == -1:
+            raise ValueError("AI 返回 JSON 未闭合")
+        end = last
+    candidate = s[start:end + 1]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", candidate, re.S)  # 再兜底一次
+        if m:
+            return json.loads(m.group(0))
+        raise
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -632,3 +680,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
