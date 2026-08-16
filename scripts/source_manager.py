@@ -151,6 +151,7 @@ def _relevance_for(s, metrics):
 def allocate_caps(sources, metrics=None):
     """按综合分把总预算加权分配给每源 cap。返回 dict id->cap。
 
+    - pinned 源（sources.json pinned==true）：固定 PINNED_SOURCE_CAP，不参与评分分配；
     - active/legacy 源：cap_i = clamp(round(BUDGET * w_i/Σw), CAP_MIN, CAP_MAX)
     - trial 源：固定 TRIAL_CAP
     - 无指标（冷启动）：均匀回退，保证每源都有机会
@@ -159,11 +160,19 @@ def allocate_caps(sources, metrics=None):
     metrics = metrics or _load_metrics()
     rel_map = {s.get("id"): _relevance_for(s, metrics) for s in sources}
     caps = {}
-    active = [s for s in sources if metrics.get(s.get("id"), {}).get("status", "active") in ("active", "legacy")]
-    trial = [s for s in sources if metrics.get(s.get("id"), {}).get("status") == "trial"]
+
+    # Pinned 源：固定最高配额，不参与轮替
+    pinned = [s for s in sources if s.get("pinned")]
+    for s in pinned:
+        caps[s.get("id")] = C.PINNED_SOURCE_CAP
+
+    trial = [s for s in sources if metrics.get(s.get("id"), {}).get("status") == "trial" and not s.get("pinned")]
     for s in trial:
         caps[s.get("id")] = C.SOURCE_CAP_TRIAL
 
+    # active/legacy 源（排除 pinned 和 trial）
+    active = [s for s in sources if metrics.get(s.get("id"), {}).get("status", "active") in ("active", "legacy")
+              and not s.get("pinned")]
     scores = {s.get("id"): compute_score(metrics.get(s.get("id"), {}), rel_map[s.get("id")]) for s in active}
     has_metrics = any(metrics.get(s.get("id"), {}).get("runs", 0) > 0 for s in active)
 
@@ -196,6 +205,9 @@ def recommend_actions(sources, metrics=None):
     today = C.beijing_now()
     for s in sources:
         sid = s.get("id")
+        # Pinned 源永不淘汰/轮替
+        if s.get("pinned"):
+            continue
         m = metrics.get(sid, {})
         if m.get("status") == "retired":
             continue

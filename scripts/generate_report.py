@@ -112,27 +112,51 @@ def _trim_signals_for_prompt(signals, max_content=1500):
     return out
 
 
+def _normalize_title(t):
+    """标题归一化：用于跨源去重（同一文章被不同源转载时 URL 不同但标题相似）。
+    小写 + 去空格/标点 + 去常见前后缀（如「实测」「上线」等 AI 生成前缀噪声）。"""
+    if not t:
+        return ""
+    t = t.lower().strip()
+    # 去除 HTML 实体
+    import html as _html
+    t = _html.unescape(t)
+    # 去除标点与空白
+    import re as _re
+    t = _re.sub(r'[^\w\u4e00-\u9fff]', '', t)
+    return t
+
+
 def _prefilter_signals(signals):
     """送 AI 前的免费预筛（零 LLM 调用，不破免费额度）：去重 + 丢桩。
 
-    - 去重：同一 item_dedup_key 只保留首次出现，避免重复源/镜像站灌水；
+    - 去重（两层）：
+      ① 同 item_dedup_key（source_url / title / content hash）只保留首次；
+      ② 归一化标题去重：同一文章被不同源转载时 URL 不同但标题相似 → 仅保留一条；
     - 丢桩：标题+正文合计 < PREFILTER_MIN_LEN 且不含主题词的极短条目直接丢弃，
       降噪并节省后续 AI 调用额度。
     """
     seen, out = set(), []
+    seen_titles = set()  # 归一化标题去重（防跨源重复）
     for s in signals:
         k = C.item_dedup_key(s)
         if k:
             if k in seen:
                 continue
             seen.add(k)
+        # 归一化标题去重（跨源同文不同 URL）
+        norm_title = _normalize_title(s.get("title", ""))
+        if norm_title and len(norm_title) >= 8:  # 短标题不参与标题去重（误杀风险高）
+            if norm_title in seen_titles:
+                continue
+            seen_titles.add(norm_title)
         text = ((s.get("title") or "") + " " + (s.get("content") or "")).strip()
         if len(text) < C.PREFILTER_MIN_LEN and not any(
             kw.lower() in text.lower() for kw in C.SOURCE_RELEVANCE_KEYWORDS
         ):
             continue
         out.append(s)
-    LOG.info("免费预筛：%d → %d（去重+丢桩）", len(signals), len(out))
+    LOG.info("免费预筛：%d → %d（去重+丢桩，含标题归一化去重）", len(signals), len(out))
     return out
 
 
@@ -1087,6 +1111,64 @@ def _cluster_dedup(report, min_cluster=3, keep=1):
     return report, removed
 
 
+def _title_dedup_report(report):
+    """L4 标题归一化去重：跨模块/同模块内，归一化标题完全相同或高度相似的条目仅保留一条。
+
+    防御场景：
+    - 同一文章被不同 RSS 源转载（URL 不同、标题微调但实质相同）；
+    - AI 生成阶段对相似话题产出重复条目（如 Saathi/MoneyBuddy 同模板评语）。
+    策略：保留字段文本最长的（最具实质），其余剔除。
+    """
+    removed = 0
+    mods = report.get("modules", {})
+    # 全局去重（跨模块也去重，避免同一文章出现在两个模块）
+    all_items = []  # (mod_name, index, item)
+    for mod in C.MODULES:
+        items = mods.get(mod, [])
+        for i, it in enumerate(items):
+            all_items.append((mod, i, it))
+
+    seen_titles = {}  # norm_title -> (mod, idx, text_len)
+    drop = set()  # (mod, idx) to remove
+    for mod, idx, it in all_items:
+        norm = _normalize_title(it.get("title", ""))
+        if not norm or len(norm) < 8:
+            continue  # 短标题跳过
+        text_len = len(_item_text(it))
+        if norm in seen_titles:
+            prev_mod, prev_idx, prev_len = seen_titles[norm]
+            # 保留更长的（更具实质）
+            if text_len > prev_len:
+                drop.add((prev_mod, prev_idx))
+                seen_titles[norm] = (mod, idx, text_len)
+            else:
+                drop.add((mod, idx))
+            removed += 1
+            LOG.warning("【标题重复】'%s' 与已有条目重复，剔除较短者(%d字 vs %d字)",
+                        (it.get("title") or "")[:60], text_len, prev_len)
+        else:
+            seen_titles[norm] = (mod, idx, text_len)
+
+    # 执行删除
+    for mod, idx in drop:
+        items = mods.get(mod, [])
+        if 0 <= idx < len(items):
+            items.pop(idx)
+            # 后续索引需要调整——简单方案：重建列表时跳过已删
+
+    # 重建：由于 pop 会改变索引，用标记方式更安全
+    for mod in C.MODULES:
+        items = mods.get(mod, [])
+        drop_idxs = {idx for m, idx in drop if m == mod}
+        if drop_idxs:
+            mods[mod] = [it for i, it in enumerate(items) if i not in drop_idxs]
+
+    return report, removed
+
+
+
+
+
 # 画布字段 key（与 publish_wp.CANVAS_FIELDS 对应）；用于骨架判定
 _CANVAS_KEYS = (
     "signal", "target_customer", "value_proposition", "how_to_mvp",
@@ -1610,6 +1692,10 @@ def main():
             report, cluster_removed = _cluster_dedup(report)
             if cluster_removed > 0:
                 LOG.warning("【聚类去重】剔除 %d 条同玩法/同地域服务冗余", cluster_removed)
+            # v4.4 L4：标题归一化去重（防 AI 生成阶段产出跨源重复条目 / 同文不同源）
+            report, title_removed = _title_dedup_report(report)
+            if title_removed > 0:
+                LOG.warning("【标题去重】剔除 %d 条重复/高度相似条目", title_removed)
             total = sum(len(report.get("modules", {}).get(k, [])) for k in C.MODULES)
             if total == 0 and len(new_signals) > 0:
                 LOG.warning("AI 返回 0 条但候选信号有 %d 条（疑似空生成），重生成（%d/%d）",

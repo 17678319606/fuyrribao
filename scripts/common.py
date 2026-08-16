@@ -30,6 +30,8 @@ BALANCE_TRIGGER = 300         # 触发均衡的总候选阈值（正常量级 ~6
 BALANCE_TARGET = 900          # 均衡目标总量；普通源单源上限 = ceil(目标 / 组数)
 HIGH_SOURCE_CAP = 70          # 高配额源（增量源，如中年指南，sources.json 中 quota=="high"）
                               # 的更高但仍有上限的配额，避免过度砍掉其新内容
+PINNED_SOURCE_CAP = 100       # 固定主用源（pinned==true，如中年指南）的专属高配额
+                              # 不参与轮替淘汰，始终保留最高优先级和容量
 
 # 渲染器版本：每次修改 publish_wp.py 的排版/结构时 +1。
 # 发布到 WP 的文章顶部会写入 <!-- dr-renderer:N --> 标记；
@@ -118,8 +120,23 @@ def item_dedup_key(item):
 MODULES = ("project_opportunities", "growth_operations", "views_insights")
 
 
+def _normalize_title_key(t):
+    """标题归一化键（供 merge_reports 跨源去重使用）。"""
+    if not t:
+        return ""
+    import re, html as _html
+    t = _html.unescape(t.lower().strip())
+    t = re.sub(r'[^\w\u4e0-\u9fff]', '', t)
+    return t if len(t) >= 8 else ""
+
+
 def merge_reports(existing, new):
-    """将 new 的条目按去重键并入 existing（existing 在前保留顺序，new 追加去重）。"""
+    """将 new 的条目按去重键并入 existing（existing 在前保留顺序，new 追加去重）。
+
+    去重策略（两层）：
+      ① item_dedup_key（source_url / title / content hash）——防同源重复；
+      ② 归一化标题去重——防跨源同文不同 URL 重复。
+    """
     if not existing:
         return new
     merged = dict(existing)
@@ -128,11 +145,16 @@ def merge_reports(existing, new):
         ex_items = list(existing.get("modules", {}).get(mod, []))
         new_items = new.get("modules", {}).get(mod, [])
         keys = {item_dedup_key(x) for x in ex_items}
+        # 归一化标题集合（跨源去重）
+        title_keys = {_normalize_title_key(x.get("title", "")) for x in ex_items}
         for it in new_items:
             k = item_dedup_key(it)
-            if k not in keys:
+            tk = _normalize_title_key(it.get("title", ""))
+            if k not in keys and (not tk or tk not in title_keys):
                 ex_items.append(it)
                 keys.add(k)
+                if tk:
+                    title_keys.add(tk)
         merged["modules"][mod] = ex_items
     if new.get("daily_summary"):
         merged["daily_summary"] = new["daily_summary"]
