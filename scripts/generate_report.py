@@ -59,13 +59,9 @@ MAX_OUTPUT_TOKENS = 16000   # 输出 token 上限（收敛输出，降低超时/
 SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
 SCREEN_BATCH = 60         # 每批送入筛选的候选数（平衡单批覆盖度与调用次数）
 
-# —— Gemini 免费层限速器 ——
-# Google AI Studio 免费层限制 15 RPM（每分钟 15 次请求）。
-# screen_signals() 分批筛选会在几秒内连续打 ~10 次 AI 调用 → 直接撞 429。
-# 本模块级变量记录上次 Gemini 原生调用时间，每次调用前自动补眠至最小间隔，
-# 所有调用方（筛选循环 / 主生成 / daily_summary）统一受控，无需逐处改。
-_gemini_last_call = 0.0   # 上次 _call_gemini_native 发起请求的 time.time()
-GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # 默认 4s → ≤15 RPM
+# —— AI 限速器（统一，已固化进 common.AIRateLimiter）——
+# 旧方案（非线程安全 _gemini_last_call + 4s 最小间隔，踩 15 RPM 零余量）已废弃；
+# 改用 common.ai_limiter：RPM 滑窗(默认10,留33%余量) + 每日预算(默认800) + 并发闸(默认1)。
 SCREEN_KEEP_PER_BATCH = 10  # 每批最多保留的精华条数（仅作日志参考，实际取汇总 TopN）
 SCREEN_FINAL_CAP = 50     # 筛选后送入最终生成的最大条数（收敛上下文，减少 400/截断）
 SCREEN_INPUT_CAP = 180    # 防御性上限：候选总量超过此数先按源均衡采样，避免一次性压垮 AI 端点（限流/超时）
@@ -364,16 +360,8 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
     """
     start = time.time()
 
-    # 免费层限速：确保两次 Gemini 调用间隔 ≥ GEMINI_RATE_INTERVAL（默认 4s），
-    # 避免分批筛选等循环密集调用撞 15 RPM 墙导致 429。
-    global _gemini_last_call
-    elapsed = time.time() - _gemini_last_call
-    if elapsed < GEMINI_RATE_INTERVAL and _gemini_last_call > 0:
-        wait = GEMINI_RATE_INTERVAL - elapsed
-        LOG.info("Gemini 限速：距上次调用 %.1fs，补眠 %.1fs（间隔=%.1fs）",
-                 elapsed, wait, GEMINI_RATE_INTERVAL)
-        time.sleep(wait)
-    _gemini_last_call = time.time()
+    # 统一限速器：免费层 RPM 滑窗 + 每日预算，避免密集调用撞 429 / 打光配额。
+    C.ai_limiter.throttle(is_gemini=True)
 
     base_url = base_url.rstrip("/")
     model_id = model.split("/")[-1] if "/" in model else model
@@ -873,7 +861,9 @@ def _extract_json(text):
         return None
     s = text.strip()
     if "```" in s:
-        s = re.sub(r"```(?:json)?\s*", "", s)
+        # 剥离任意语言标记的代码围栏（```json / ```JSON / ```python / 裸 ``` 等），
+        # 兼容模型偶发添加的 Markdown 包裹，避免解析崩溃。
+        s = re.sub(r"```[a-zA-Z]*\s*", "", s, flags=re.I)
         s = s.replace("```", "")
     start = s.find("{")
     if start == -1:
@@ -1606,6 +1596,11 @@ def screen_signals(signals, base_urls, api_key, model, system_prompt):
             continue
         LOG.info("分批筛选第 %d/%d 批完成，本批耗时 %.1fs，返回 %d 条",
                  bi + 1, len(batches), time.time() - bs, len(picks))
+        # ② 组间强制随机延时（5-10s）：进一步摊开请求，远离免费层限流墙
+        if bi + 1 < len(batches):
+            _jit = random.uniform(5, 10)
+            LOG.info("组间随机延时 %.1fs（避免密集请求撞限流墙）", _jit)
+            time.sleep(_jit)
         for p in picks:
             pid = p.get("id")
             if pid not in by_id:
@@ -1633,6 +1628,21 @@ def screen_signals(signals, base_urls, api_key, model, system_prompt):
              len(signals), len(batches), len(kept), len(skipped_raw), len(merged),
              len(merged), time.time() - t0)
     return merged
+
+
+def _record_gen_progress(day, signal_ids):
+    """① 记录本次已成功生成条目的来源信号 ID，供崩溃续跑观测/跳过。"""
+    try:
+        path = os.path.join(C.STATE_DIR, "gen_progress_%s.json" % day)
+        prev = C.load_json(path, {})
+        done = set(prev.get("done_ids", []))
+        for sid in signal_ids:
+            if sid:
+                done.add(sid)
+        C.save_json(path, {"day": day, "done_ids": sorted(done),
+                           "updated": datetime.datetime.now().isoformat()})
+    except Exception as e:
+        LOG.warning("gen_progress 记录失败（不影响主流程）: %s", e)
 
 
 def _emit_changed(changed):
@@ -1933,6 +1943,7 @@ def main():
 
         # 调用 AI（生成级重试：应对空生成 / 解析失败 / 结构不完整）
         content = None
+        report = None  # ④ 防御：_call_ai 全重试失败也不 NameError，交由下方 report is None 分支安全跳过
         for gen in range(1, GEN_RETRIES + 1):
             try:
                 content = _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
@@ -2033,12 +2044,25 @@ def main():
 
         if report is None:
             # 骨架/空批次被跳过：无新增有效内容，保留已累积内容不发布
+            try:
+                C.save_json(daily_state_path, accumulated)
+            except Exception:
+                pass
             _emit_changed(False)
             LOG.info("本次无有效新增内容，跳过发布（已累积 %d 条保留）。", acc_total)
             return
 
         # 合并到当日累积（旧内容保留 + 新内容去重追加）
         merged = C.merge_reports(accumulated, report)
+        # ① 增量持久化：合并后立即落盘 + 记录已生成信号进度，使中途崩溃重跑时
+        #    能跳过已生成条目（existing_keys 基于已存日报去重），省下重烧的 token。
+        try:
+            C.save_json(daily_state_path, merged)
+            _record_gen_progress(today, [sig.get("id") for sig in new_signals if sig.get("id")])
+            LOG.info("增量检查点：已合并 %d 条落盘（崩溃续跑可直接跳过已生成信号）",
+                     sum(len(merged.get("modules", {}).get(k, [])) for k in C.MODULES))
+        except Exception as e:
+            LOG.warning("增量检查点写盘失败（不影响主流程）: %s", e)
         # 强制分波 / 全天条数上限：首波 ≤30；末波无早波收录 ≤60；
         # 末波有早波收录 ≤ 已有+30（即本波新增 ≤30，全天 ≤60）
         if is_final:
