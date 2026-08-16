@@ -147,7 +147,17 @@
     "name": "Reddit r/SideProject",
     "added_by": "curated",
     "added_date": "2026-08-16",
-    "rationale": "独立开发者项目展示社区，高相关"
+    "rationale": "独立开发者项目展示社区，高相关",
+    "enabled": false,
+    "ci_blocked": true,
+    "disabled_reason": "Reddit JSON API / theresanaiforthat feed 从 CI 数据中心 IP 返回 403，长期无法抓取（credit 自愈亦无效）。已从每日抓取停用；如需真复活需 Reddit OAuth 凭据或自托管 RSS 桥。主题已被下列活跃源覆盖。",
+    "replacement": [
+      "indiehackers",
+      "producthunt",
+      "growthhackers",
+      "w2solo"
+    ],
+    "disabled_date": "2026-08-16"
   },
   {
     "id": "reddit_indiehackers",
@@ -156,7 +166,17 @@
     "name": "Reddit r/indiehackers",
     "added_by": "curated",
     "added_date": "2026-08-16",
-    "rationale": "indie hacker 社区"
+    "rationale": "indie hacker 社区",
+    "enabled": false,
+    "ci_blocked": true,
+    "disabled_reason": "Reddit JSON API / theresanaiforthat feed 从 CI 数据中心 IP 返回 403，长期无法抓取（credit 自愈亦无效）。已从每日抓取停用；如需真复活需 Reddit OAuth 凭据或自托管 RSS 桥。主题已被下列活跃源覆盖。",
+    "replacement": [
+      "indiehackers",
+      "producthunt",
+      "growthhackers",
+      "w2solo"
+    ],
+    "disabled_date": "2026-08-16"
   },
   {
     "id": "reddit_entrepreneur",
@@ -165,7 +185,16 @@
     "name": "Reddit r/Entrepreneur",
     "added_by": "curated",
     "added_date": "2026-08-16",
-    "rationale": "创业/副业讨论社区"
+    "rationale": "创业/副业讨论社区",
+    "enabled": false,
+    "ci_blocked": true,
+    "disabled_reason": "Reddit JSON API / theresanaiforthat feed 从 CI 数据中心 IP 返回 403，长期无法抓取（credit 自愈亦无效）。已从每日抓取停用；如需真复活需 Reddit OAuth 凭据或自托管 RSS 桥。主题已被下列活跃源覆盖。",
+    "replacement": [
+      "growthhackers",
+      "producthunt",
+      "w2solo"
+    ],
+    "disabled_date": "2026-08-16"
   },
   {
     "id": "reddit_artificial",
@@ -174,7 +203,19 @@
     "name": "Reddit r/artificial",
     "added_by": "curated",
     "added_date": "2026-08-16",
-    "rationale": "AI 资讯社区，高相关"
+    "rationale": "AI 资讯社区，高相关",
+    "enabled": false,
+    "ci_blocked": true,
+    "disabled_reason": "Reddit JSON API / theresanaiforthat feed 从 CI 数据中心 IP 返回 403，长期无法抓取（credit 自愈亦无效）。已从每日抓取停用；如需真复活需 Reddit OAuth 凭据或自托管 RSS 桥。主题已被下列活跃源覆盖。",
+    "replacement": [
+      "qbitai",
+      "jiqizhixin",
+      "sspai",
+      "ifanr",
+      "tmtpost",
+      "github_trending_zh"
+    ],
+    "disabled_date": "2026-08-16"
   },
   {
     "id": "reddit_localllama",
@@ -183,7 +224,18 @@
     "name": "Reddit r/LocalLLaMA",
     "added_by": "curated",
     "added_date": "2026-08-16",
-    "rationale": "LLM/AI 工具实践"
+    "rationale": "LLM/AI 工具实践",
+    "enabled": false,
+    "ci_blocked": true,
+    "disabled_reason": "Reddit JSON API / theresanaiforthat feed 从 CI 数据中心 IP 返回 403，长期无法抓取（credit 自愈亦无效）。已从每日抓取停用；如需真复活需 Reddit OAuth 凭据或自托管 RSS 桥。主题已被下列活跃源覆盖。",
+    "replacement": [
+      "qbitai",
+      "jiqizhixin",
+      "sspai",
+      "ifanr",
+      "github_trending_zh"
+    ],
+    "disabled_date": "2026-08-16"
   },
   {
     "id": "reddit_selfhosted",
@@ -192,7 +244,17 @@
     "name": "Reddit r/selfhosted",
     "added_by": "curated",
     "added_date": "2026-08-16",
-    "rationale": "自托管/技术副业"
+    "rationale": "自托管/技术副业",
+    "enabled": false,
+    "ci_blocked": true,
+    "disabled_reason": "Reddit JSON API / theresanaiforthat feed 从 CI 数据中心 IP 返回 403，长期无法抓取（credit 自愈亦无效）。已从每日抓取停用；如需真复活需 Reddit OAuth 凭据或自托管 RSS 桥。主题已被下列活跃源覆盖。",
+    "replacement": [
+      "appinn",
+      "oschina",
+      "sspai",
+      "geekpark"
+    ],
+    "disabled_date": "2026-08-16"
   },
   {
     "id": "smashing",
@@ -219,7 +281,16 @@
     "name": "There's An AI For That",
     "added_by": "curated",
     "added_date": "2026-08-16",
-    "rationale": "AI 工具聚合，强相关"
+    "rationale": "AI 工具聚合，强相关",
+    "enabled": false,
+    "ci_blocked": true,
+    "disabled_reason": "Reddit JSON API / theresanaiforthat feed 从 CI 数据中心 IP 返回 403，长期无法抓取（credit 自愈亦无效）。已从每日抓取停用；如需真复活需 Reddit OAuth 凭据或自托管 RSS 桥。主题已被下列活跃源覆盖。",
+    "replacement": [
+      "qbitai",
+      "jiqizhixin",
+      "producthunt"
+    ],
+    "disabled_date": "2026-08-16"
   },
   {
     "id": "lennys",

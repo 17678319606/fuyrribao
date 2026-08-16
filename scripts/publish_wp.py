@@ -439,9 +439,15 @@ def main():
         raise SystemExit("ai failed report rejected")
     total = sum(len(report.get("modules", {}).get(k, [])) for k, _, _ in MODULES)
     ds = report.get("daily_summary", {})
-    if total == 0 and not ds.get("methodology"):
-        LOG.info("今日无实质内容，跳过发布（不发布空文章）。")
-        return
+    # P1 发布前置质量护栏：日报总条目数低于阈值 → 暂停发布并告警（绝不照发空/灌水日报）。
+    # 非零退出触发 workflow 步骤失败 → 末次/手动/失败通知路径自动企业微信告警。
+    min_items = int(os.environ.get("FUYR_MIN_ITEMS", "1"))
+    LOG.info("质量护栏：日报总条目数=%d（发布阈值 %d）", total, min_items)
+    if total < min_items:
+        reason = "条目数=0（AI 未产出有效内容或源普遍抓取失败）" if total == 0 \
+            else f"条目数={total} < 发布阈值 {min_items}"
+        LOG.error("质量护栏拦截：%s，暂停发布并告警。", reason)
+        raise SystemExit("quality gate: " + reason)
 
     content = render(report)
     title = f"副业日报 · {today}"

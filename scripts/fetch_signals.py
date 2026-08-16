@@ -367,6 +367,13 @@ def main():
     src_status = {}  # 源可用性状态：供后续告警/巡检使用
     for cfg in sources:
         sid = cfg.get("id")
+        # P2：跳过显式禁用 / CI 不可达的源（如 reddit JSON、被数据中心 IP 封的 feed），
+        # 既避免无谓的 403 抓取与 credit 自愈空耗，也避免触发"源抓取失败"误告警。
+        if cfg.get("enabled") is False or cfg.get("ci_blocked"):
+            LOG.info("源 %s 已禁用(enabled=%s, ci_blocked=%s)，跳过抓取。",
+                     sid, cfg.get("enabled"), cfg.get("ci_blocked"))
+            src_status[sid] = {"ok": True, "reason": "disabled", "got": 0, "fresh": 0}
+            continue
         stype = cfg.get("type")
         parser = PARSERS.get(stype)
         if not parser:
