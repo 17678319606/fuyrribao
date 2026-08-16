@@ -45,7 +45,6 @@ DATA_DIR = C.DATA_DIR
 
 RETRY_PER_ENDPOINT = 2      # 每端点重试：收敛防时间爆炸；冗余靠多镜像+DoH+代理池提供
 BACKOFF_BASE = 8            # 退避基数 8s：网关高延迟，更长退避让其喘气（用户允许稍晚生成）
-MAX_BACKOFF = 60             # 退避封顶 60s：防多端点 524 重试叠加把单轮拖到数百秒（失控）
 REQ_TIMEOUT = (20, 300)     # 默认读超时 300s；可被环境变量 AI_REQUEST_TIMEOUT 覆盖
 GEN_RETRIES = 4             # 外层生成重试 4 次：用户要求必须 AI 输出、可稍晚，多给几次机会
 STREAM_MAX_SECONDS = 900    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
@@ -59,6 +58,14 @@ MAX_OUTPUT_TOKENS = 16000   # 输出 token 上限（收敛输出，降低超时/
 # —— 分批筛选（避免大量候选被直接截断丢弃，提升内容丰富度）——
 SCREEN_THRESHOLD = 60     # 候选超过此数才启用分批筛选；否则全量直送生成（省调用、保速度）
 SCREEN_BATCH = 60         # 每批送入筛选的候选数（平衡单批覆盖度与调用次数）
+
+# —— Gemini 免费层限速器 ——
+# Google AI Studio 免费层限制 15 RPM（每分钟 15 次请求）。
+# screen_signals() 分批筛选会在几秒内连续打 ~10 次 AI 调用 → 直接撞 429。
+# 本模块级变量记录上次 Gemini 原生调用时间，每次调用前自动补眠至最小间隔，
+# 所有调用方（筛选循环 / 主生成 / daily_summary）统一受控，无需逐处改。
+_gemini_last_call = 0.0   # 上次 _call_gemini_native 发起请求的 time.time()
+GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # 默认 4s → ≤15 RPM
 SCREEN_KEEP_PER_BATCH = 10  # 每批最多保留的精华条数（仅作日志参考，实际取汇总 TopN）
 SCREEN_FINAL_CAP = 50     # 筛选后送入最终生成的最大条数（收敛上下文，减少 400/截断）
 SCREEN_INPUT_CAP = 180    # 防御性上限：候选总量超过此数先按源均衡采样，避免一次性压垮 AI 端点（限流/超时）
@@ -199,9 +206,9 @@ def _candidate_endpoints():
 
 
 def _is_retryable_http(status):
-    """连接层失败(status=0，无响应体)/限流 429 / 5xx 服务端错误 / 524 网关超时均可重试；
-    4xx 其他（鉴权/参数错误）直接放弃。524 属 EdgeOne 源站响应超时，归为可重试。"""
-    return status == 0 or status == 429 or status == 524 or (500 <= status < 600)
+    """连接层失败(status=0，无响应体)/限流 429 / 5xx 服务端错误可重试；
+    4xx 其他（鉴权/参数错误）直接放弃。"""
+    return status == 0 or status == 429 or (500 <= status < 600)
 
 
 def _retry_after_seconds(resp):
@@ -317,6 +324,18 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
     返回模型原始 content 字符串。
     """
     start = time.time()
+
+    # 免费层限速：确保两次 Gemini 调用间隔 ≥ GEMINI_RATE_INTERVAL（默认 4s），
+    # 避免分批筛选等循环密集调用撞 15 RPM 墙导致 429。
+    global _gemini_last_call
+    elapsed = time.time() - _gemini_last_call
+    if elapsed < GEMINI_RATE_INTERVAL and _gemini_last_call > 0:
+        wait = GEMINI_RATE_INTERVAL - elapsed
+        LOG.info("Gemini 限速：距上次调用 %.1fs，补眠 %.1fs（间隔=%.1fs）",
+                 elapsed, wait, GEMINI_RATE_INTERVAL)
+        time.sleep(wait)
+    _gemini_last_call = time.time()
+
     base_url = base_url.rstrip("/")
     model_id = model.split("/")[-1] if "/" in model else model
     action = "streamGenerateContent" if stream else "generateContent"
@@ -402,11 +421,6 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
             except Exception:
                 line = raw_line.decode("utf-8", "replace").strip()
             if not line:
-                continue
-            # 兼容 SSE（data: 前缀）与纯 JSON Lines 两种流式格式
-            if line.startswith("data:"):
-                line = line[len("data:"):].strip()
-            if not line or line == "[DONE]":
                 continue
             try:
                 obj = json.loads(line)
@@ -667,7 +681,6 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
                     if _is_retryable_http(status):
                         # 尊重服务端 Retry-After（限流冷却），否则用指数退避
                         wait = _retry_after_seconds(e.response) or (BACKOFF_BASE * (2 ** (attempt - 1)))
-                        wait = min(wait, MAX_BACKOFF)
                         # EdgeOne 源站超时(524)/5xx：后端可能过载，给更长冷却让其恢复，
                         # 避免 8s 内反复打满已过载的源站（网关抖动自愈的关键）。
                         if 500 <= status < 600:
@@ -877,18 +890,8 @@ def _validate(report):
                 LOG.warning("模块 %s 第 %d 条为字符串（非对象），已清洗为标题卡片", key, idx)
                 cleaned.append({"title": it[:200], "source_name": "",
                                 "source_url": "", "signal": ""})
-            elif hasattr(it, "items") and not isinstance(it, (str, bytes)):
-                # AI/JSON 解码偶发返回 Mapping 子类（非严格 dict），原逻辑 isinstance(it,dict)
-                # 为 False -> 在 for…else 错挂下被静默丢弃，内容丢失。此处强制转 dict 并清洗，保住内容。
-                LOG.warning("模块 %s 第 %d 条为 Mapping 子类（非严格 dict），已转 dict 保内容", key, idx)
-                d = dict(it)
-                d.setdefault("title", "")
-                d.setdefault("source_name", "")
-                d.setdefault("source_url", "")
-                d.setdefault("signal", "")
-                cleaned.append(d)
-            else:
-                LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
+        else:
+            LOG.warning("模块 %s 第 %d 条类型异常（%s），已跳过", key, idx, type(it).__name__)
         if len(cleaned) > C.MAX_ITEMS_PER_MODULE:
             LOG.info("模块 %s 条目 %d 超出每模块上限 %d，截断至上限",
                      key, len(cleaned), C.MAX_ITEMS_PER_MODULE)
