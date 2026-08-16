@@ -113,12 +113,20 @@ class AIRateLimiter:
                 with self._lock:
                     self._window.append(time.time())
                     self._used += 1
-                    if int(self._used) % 20 == 0:
-                        self._save()
+                # 每次调用都持久化（文件极小 ~250B）：跨进程/跨运行预算可追、快照可读真实计数。
+                self._save()
 
     def snapshot(self):
         self._rollover_day()
-        return {"day": self._day, "used": int(self._used), "rpm": self.rpm, "rpd": self.rpd}
+        # 优先读持久化文件（跨进程/跨运行真实计数），内存值兜底
+        used = self._used
+        try:
+            d = load_json(AI_RATE_STATE_FILE, {})
+            if d.get("day") == self._day:
+                used = float(d.get("used", used))
+        except Exception:
+            pass
+        return {"day": self._day, "used": int(used), "rpm": self.rpm, "rpd": self.rpd}
 
 
 ai_limiter = AIRateLimiter()
@@ -145,6 +153,7 @@ GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # �
 # 旧方案（非线程安全的 _gemini_last_call + 4s 最小间隔）已废弃；
 # 改用 common.ai_limiter（RPM 滑窗 + 每日预算 + 并发闸），见 common.py。
 '''
+    assert old_def in s, "report old_def 锚点缺失（源码可能已变更）"
     s = s.replace(old_def, new_def, 1)
     old_in = '''    # 免费层限速：确保两次 Gemini 调用间隔 ≥ GEMINI_RATE_INTERVAL（默认 4s），
     # 避免分批筛选等循环密集调用撞 15 RPM 墙导致 429。
@@ -160,12 +169,14 @@ GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # �
     new_in = '''    # 统一限速器：免费层 RPM 滑窗 + 每日预算，避免密集调用撞 429 / 打光配额。
     C.ai_limiter.throttle(is_gemini=True)
 '''
+    assert old_in in s, "report old_in 锚点缺失（源码可能已变更）"
     s = s.replace(old_in, new_in, 1)
     old_openai = '''        url = base_url.rstrip("/") + "/chat/completions"
         # 解析目标 host：仅国内网关等易抖动 host 才用 DoH 兜底钉 IP；'''
     new_openai = '''        url = base_url.rstrip("/") + "/chat/completions"
         C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base_url))
         # 解析目标 host：仅国内网关等易抖动 host 才用 DoH 兜底钉 IP；'''
+    assert old_openai in s, "report old_openai 锚点缺失（源码可能已变更）"
     s = s.replace(old_openai, new_openai, 1)
     old_nb = '''            try:
                 r2 = requests.post(url, headers=headers, json=nb_payload,
@@ -174,6 +185,7 @@ GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # �
                 C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base_url))
                 r2 = requests.post(url, headers=headers, json=nb_payload,
                                    proxies=None, timeout=timeout)'''
+    assert old_nb in s, "report old_nb 锚点缺失（源码可能已变更）"
     s = s.replace(old_nb, new_nb, 1)
     open(path, "w", encoding="utf-8").write(s)
     print("[report] 注入 OK")
@@ -184,6 +196,7 @@ def patch_roundup():
     s = open(path, encoding="utf-8").read()
     old = '''            try:
                 r = requests.post(url, headers=auth, json=body, timeout=150)'''
+    assert old in s, "roundup 锚点缺失（源码可能已变更）"
     new = '''            try:
                 C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base))
                 r = requests.post(url, headers=auth, json=body, timeout=150)'''
