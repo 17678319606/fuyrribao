@@ -1,0 +1,110 @@
+# 副业日报·AI 限速器实测（不发布）
+# ─────────────────────────────────────────────────────────────────────
+# 目的：在真实 GitHub Actions 环境跑一次「采集 + AI 生成」，验证：
+#   1) AIRateLimiter 注入成功（RPM 滑窗=10 / 每日预算=800 / 并发闸=1）；
+#   2) 免费版 Gemini 全程不撞 429；
+#   3) 当日日报正常产出（state/daily_report_{today}.json 有条目）。
+# 不调用 publish_wp.py，绝不会污染线上 WordPress / 公众号。
+# 触发：push 到本文件或 scripts/patches/apply_rate_limit.py 自动跑；
+#       也可 manual workflow_dispatch 手动跑（支持多次实测）。
+name: 副业日报·限速器实测（不发布）
+
+on:
+  workflow_dispatch:
+    inputs:
+      rpm:
+        description: 'Gemini RPM 滑窗上限（默认 10，留 ~33% 余量 < 15）'
+        required: false
+        default: '10'
+      rpd:
+        description: 'Gemini 每日免费预算上限（默认 800，留余量 < 1500）'
+        required: false
+        default: '800'
+  push:
+    paths:
+      - '.github/workflows/zz_test_live.yml'
+      - 'scripts/patches/apply_rate_limit.py'
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
+  AI_MODEL: gemini-flash-latest
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
+  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  AI_FALLBACK_MODEL: auto
+  GEMINI_RPM: ${{ github.event.inputs.rpm || '10' }}
+  GEMINI_RPD: ${{ github.event.inputs.rpd || '800' }}
+  GEMINI_MAX_CONCURRENCY: '1'
+
+jobs:
+  live-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
+
+      - name: 注入 AI 限速器（免费 Gemini 配额保护，防 429）
+        run: python scripts/patches/apply_rate_limit.py
+
+      - name: 采集 + AI 生成（不发布）
+        run: |
+          python scripts/fetch_signals.py
+          python scripts/generate_report.py
+
+      - name: 收集实测快照（限速器 + 日报条目）
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, json, sys
+          sys.path.insert(0, "scripts")
+          import common as C
+          snap = C.ai_limiter.snapshot() if hasattr(C, "ai_limiter") else {}
+          p = "state/daily_report_%s.json" % C.date_str()
+          n_items = 0
+          if os.path.exists(p):
+              try:
+                  d = json.load(open(p, encoding="utf-8"))
+                  if isinstance(d, dict):
+                      n_items = len(d.get("items", d.get("signals", [])))
+              except Exception:
+                  pass
+          out = {
+              "ai_limiter_snapshot": snap,
+              "daily_report_items": n_items,
+              "report_exists": os.path.exists(p),
+          }
+          os.makedirs("state", exist_ok=True)
+          json.dump(out, open("state/_live_test_result.json", "w"), ensure_ascii=False, indent=2)
+          print(json.dumps(out, ensure_ascii=False))
+          PY
+
+      - name: 回写实测结果（[skip ci]，不触发流水线循环）
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/_live_test_result.json || true
+          git diff --cached --quiet || git commit -m "test: live limiter result [skip ci]"
+          for j in 1 2 3; do
+            if git fetch origin && git pull --rebase origin main && git push origin main; then
+              echo "✅ 实测结果已回写"
+              break
+            fi
+            echo "git push 第 $j/3 次失败，5s 后重试…"
+            sleep 5
+          done
