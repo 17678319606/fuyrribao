@@ -28,6 +28,11 @@ on:
 permissions:
   contents: write
 
+# 单发隔离：避免多次手动/推送触发并发抢同一把免费 AI key（否则额度被自己打爆、产出为空）
+concurrency:
+  group: fuyrribao-live-test
+  cancel-in-progress: false
+
 env:
   TZ: Asia/Shanghai
   AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
@@ -97,18 +102,3 @@ jobs:
           print(json.dumps(out, ensure_ascii=False))
           PY
 
-      - name: 回写实测结果（[skip ci]，不触发流水线循环）
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add state/_live_test_result.json || true
-          git diff --cached --quiet || git commit -m "test: live limiter result [skip ci]"
-          for j in 1 2 3; do
-            if git fetch origin && git pull --rebase origin main && git push origin main; then
-              echo "✅ 实测结果已回写"
-              break
-            fi
-            echo "git push 第 $j/3 次失败，5s 后重试…"
-            sleep 5
-          done
