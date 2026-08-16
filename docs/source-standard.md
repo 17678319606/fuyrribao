@@ -70,3 +70,51 @@
 - 内容筛选的"打分地基"（`themes/sidehustle.json` + `scripts/score.py`）是**条目的**
   质量评分（回答"抓来的内容里哪些是好内容"）。
 - 两者独立：换主题时，源标准微调词表即可；内容打分地基的"通用层"不变、只换"主题层" yaml。
+
+## 7. 内容源容量管理系统（运行时打分 → 动态容量上限 → 生命周期）
+
+> 与 §1–§4「准入标准」互补但不同层：准入标准决定"哪些源值得加进来"；
+> 本系统决定"加进来之后，每个源每轮最多抓多少、何时毕业/淘汰"。
+> 实现见 `scripts/source_manager.py`（零 LLM 成本，纯运行时指标 + 启发式相关度）。
+
+### 7.1 为什么还要"锁容量上限"（重新评估结论）
+
+锁容量**值得且必须**，三条硬理由：
+1. **防单源垄断**：中年指南 / aggregator 类高产源会淹没其他源，压低多样性；
+2. **保质量下限**：低质源不该占满候选预算，额度应让给高质源；
+3. **锁资源上限**：fetch HTTP 次数、AI 上下文长度、LLM 成本都随候选量线性增长。
+
+但"锁"不等于"一刀切"——本系统在锁总量前提下做精细化：按综合分把预算加权分给每源。
+
+### 7.2 四维综合分（0–100，权重 相关0.30/稳定0.25/产量0.20/质量0.25）
+
+- **相关 rel**：`relevance` curated(1–5) 或 `heuristic_relevance()` 启发式（不调 LLM）；
+- **稳定 stab** = fetch_ok / fetch_total（来自 `source_status.json` 抓取成败）；
+- **产量 yield** = min(1, 日均有效候选 / `SOURCE_YIELD_REF=20`)；
+- **质量 qual** = min(1, 日均成卡 / `SOURCE_QUALITY_REF=1.5`)（来自 generate 后成卡统计）。
+
+`score = 100 × (0.30·rel + 0.25·stab + 0.20·yield + 0.25·qual)`。
+
+### 7.3 动态容量分配（fetch_signals 实际生效）
+
+- 每活跃源 cap = `clamp(round(BUDGET·w_i/Σw), CAP_MIN=5, CAP_MAX=120)`，`BUDGET=600`；
+- 高分源更高 cap（提质量），但 `CAP_MAX=120` 封顶 + 全局 `MAX_CANDIDATES=1500` 兜底（防垄断）；
+- 观测期(trial)源固定 `CAP_TRIAL=15`；冷启动无指标时均匀回退。
+- **与 §1 准入标准、`score.py` 条目打分、`BALANCE_*` 多样性均衡的关系**：
+  fetch 阶段先按"本系统 cap"截断每源（按运行指标打分），再走 `BALANCE_*` 多样性采样
+  （防单源占比过高）——三层各管一段，互不冲突。
+
+### 7.4 源生命周期（默认仅建议，落地需 `FUYR_SOURCE_AUTOMATION=1`）
+
+- **观测期 trial**：新源小 cap 试运行，积累 `SOURCE_INCUBATION_RUNS=8` 轮指标；
+- **晋升替换**：达标（`eval_score≥60` 且 `fetch_ok_rate≥0.6`）→ 转 active，并替换当前
+  最低分 active 源（被替换源进 `retired` 备份，不删，可回滚）；
+- **死源淘汰**：`SOURCE_DEAD_DAYS=120` 天无有效贡献，或 `SOURCE_DEAD_FAILS=14` 次连续
+  抓取失败 → `retired`（保留记录可回滚）。
+- 所有判定写 `state/source_actions.json` 审计；只有显式 `FUYR_SOURCE_AUTOMATION=1`
+  才改 `sources.json`，绝不静默改动。
+
+### 7.5 资源消耗
+
+全部为本地计算（字典/算术），**零 LLM 调用、零额外网络请求**；指标落盘
+`state/source_metrics.json`，建议由 `scripts/monthly_cost_check.py` 每月核对 AI 成本。

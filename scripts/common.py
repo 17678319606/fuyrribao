@@ -156,3 +156,76 @@ def cap_modules(modules, max_total):
         longest = max(cand, key=lambda m: len(out[m]))
         out[longest].pop()
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 内容源管理系统（零 LLM 成本）：按「综合打分」动态分配每源候选容量上限
+# ─────────────────────────────────────────────────────────────────────
+# 总预算：所有「活跃(active)」源的容量上限之和的软目标。硬上限仍是 MAX_CANDIDATES。
+# 设计意图：高质源给更高 cap（提质量），但 cap_max 封顶 + 硬上限兜底（防垄断）。
+SOURCE_CAP_BUDGET = 600
+SOURCE_CAP_MIN = 5          # 单个活跃源的最低 cap（保证多样性，弱源也有露脸机会）
+SOURCE_CAP_MAX = 120        # 单个活跃源的最高 cap（防单一高产源垄断候选池）
+SOURCE_CAP_TRIAL = 15       # 观测期(trial)源的低容量（先小范围验证，不占满预算）
+SOURCE_INCUBATION_RUNS = 8  # 新源观测期需积累的运行次数（≈8 天，跨两次/日）
+SOURCE_PROMOTE_SCORE = 60   # 观测期综合分达标线（0-100），达标才晋升 active
+SOURCE_MIN_FETCH_OK = 0.6   # 观测期 fetch 成功率下限，低于则淘汰
+SOURCE_DEAD_DAYS = 120      # 连续 N 天无任何有效贡献 → 候选淘汰（数月级）
+SOURCE_DEAD_FAILS = 14      # 连续 fetch 失败次数达到 → 淘汰（约两周持续故障）
+# 四维权重（相关 / 稳定 / 产量 / 质量），和为 1
+SOURCE_SCORE_WEIGHTS = (0.30, 0.25, 0.20, 0.25)
+SOURCE_YIELD_REF = 20       # 单源日均有效候选参考值（达到即产量维满分）
+SOURCE_QUALITY_REF = 1.5    # 单源日均成卡参考值（达到即质量维满分）
+SOURCE_METRICS_FILE = os.path.join(STATE_DIR, "source_metrics.json")
+SOURCE_ACTIONS_FILE = os.path.join(STATE_DIR, "source_actions.json")
+
+# ─────────────────────────────────────────────────────────────────────
+# 成本日志（月度自检 / 低资源消耗监控）
+# ─────────────────────────────────────────────────────────────────────
+COST_INPUT_RATE = 0.5 / 1_000_000    # 璇玑 ¥/1M 输入 token
+COST_OUTPUT_RATE = 1.5 / 1_000_000   # 璇玑 ¥/1M 输出 token
+COST_CHARS_PER_TOKEN = 2             # 中文约 2 字符/token
+COST_LOG_FILE = os.path.join(STATE_DIR, "cost_log.json")
+COST_LOOKBACK_DAYS = 30
+COST_BUDGET_DEFAULT = 50.0           # 月度成本预算（¥）；超则仅告警不阻断
+
+
+def log_run_cost(chars_in=0, chars_out=0, tag="generate_report"):
+    """把一次运行的估算成本追加到 state/cost_log.json（滚动保留 60 天）。
+
+    仅做本地记账，不调任何外部服务；用于月度自检与资源监控。
+    """
+    try:
+        today = date_str()
+        log = load_json(COST_LOG_FILE, [])
+        cost = (chars_in / COST_CHARS_PER_TOKEN) * COST_INPUT_RATE \
+             + (chars_out / COST_CHARS_PER_TOKEN) * COST_OUTPUT_RATE
+        log.append({"date": today, "tag": tag, "chars_in": int(chars_in),
+                    "chars_out": int(chars_out), "cost": round(cost, 6)})
+        # 滚动裁剪：仅保留最近 60 天
+        cutoff = days_ago_iso(60)[:10]
+        log = [r for r in log if r.get("date", "") >= cutoff]
+        save_json(COST_LOG_FILE, log)
+    except Exception:
+        pass
+
+
+# ---------- 内容源静态相关度（启发式，零 LLM 成本） ----------
+
+SOURCE_RELEVANCE_KEYWORDS = (
+    "副业", "独立开发", "创业", "赚钱", "增长", "运营", "变现", "流量",
+    "产品", "项目", "个体", "自由职业", "小本", "轻资产",
+    "indie", "hacker", "startup", "side", "growth", "maker", "product",
+    "saas", "developer", "创业者", "生财", "搞钱",
+)
+
+
+def heuristic_relevance(name, url=""):
+    """从源名称/域名启发式估计「副业主题相关度」(0.0~1.0)，无需 LLM。
+
+    - 命中关键词越多越相关；基线 0.4（默认中等相关），上限 1.0。
+    - 这是「相关」维度的静态兜底；sources.json 里可放 curated 的 relevance(1-5) 覆盖。
+    """
+    text = (str(name) + " " + str(url)).lower()
+    hits = sum(1 for kw in SOURCE_RELEVANCE_KEYWORDS if kw.lower() in text)
+    return min(1.0, 0.4 + 0.12 * hits)

@@ -1619,6 +1619,18 @@ def main():
     LOG.info("日报累积更新：当日共 %d 条（新增 %d），写入 %s，总耗时 %.1fs",
              total, len(new_signals), out_path, time.time() - overall_t0)
 
+    # —— 源管理系统：统计每源最终成卡数 + 记录本次运行成本（均非阻塞）——
+    try:
+        import source_manager as SM
+        SM.record_contributions(report)
+    except Exception as e:
+        LOG.warning("源成卡统计失败（不影响主流程）: %s", e)
+    try:
+        out_chars = len(json.dumps(report, ensure_ascii=False))
+        C.log_run_cost(chars_out=out_chars, tag="generate_report")
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     main()

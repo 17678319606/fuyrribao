@@ -45,7 +45,8 @@
 │        ↓ data/candidates-YYYY-MM-DD.json                      │
 │                                                               │
 │  步骤2 generate_report.py                                      │
-│    └─ 优先 Gemini 原生 API（免费层）；失败退回 ai.jinbufenzi.com（国产备用）       │
+│    └─ 默认走璇玑国内网关 ai.jinbufenzi.com（主通道）；仅当显式配置       │
+│       ai_base_url 指向 Gemini 时才用 Gemini 兜底（非默认首选）        │
 │       喂 SKILL.md 规则 + candidates → 结构化日报 JSON           │
 │        ↓ data/report-YYYY-MM-DD.json                          │
 │                                                               │
@@ -75,11 +76,11 @@
 - **不滥用你的 GitHub PAT**：流水线提交回仓库用的是 GitHub **自带的 `GITHUB_TOKEN`**，
   不需要把你给的 PAT 放进仓库。你给的 PAT 仅用于首次把本方案推送到 `fuyrribao` 仓库。
 - 需要在仓库 `Settings → Secrets and variables → Actions` 里配置（**必填两项 + 一项备用，其余可选**）：
-  - `GEMINI_API_KEY`（**必填·首选 AI**）：Google AI Studio 申请的 key，走 Gemini 原生 API（免费层 `gemini-flash-latest`）。这是日报 AI 生成的**主通道**。
+  - `AI_SIDEHUSTLE_API_KEY`（**必填·默认主 AI**）：璇玑国内网关 key，走 `ai.jinbufenzi.com/v1`。代码默认主通道就是它（无显式 `ai_base_url` 时）。
   - `WP_APP_PASSWORD`（**必填·发布**）：WordPress 应用密码（App Password）。WP 登录用户名已在工作流 `env.WP_USER` 硬编码为 `tougao`，**无需单独配置**。
-  - `AI_SIDEHUSTLE_API_KEY`（**必填·备用 AI**）：国产 AI 网关 key，Gemini 全失败时自动退回（见工作流 `AI_FALLBACK_URL`）。
-  - 可选：`AI_MODEL`（覆盖默认模型）、`AI_BASE_URL_POOL`（Gemini 同构镜像池）、`AI_PROXY_POOL`、`AI_REQUEST_TIMEOUT`、`AI_FORCE_NON_STREAM`。
-- 📌 **AI 路由现状**：优先 Google Gemini 免费版生成日报；Gemini 不可用 → 自动退回国产 AI 网关（备用）；WordPress 发布独立走 WP REST API。三者 tier 分明，互不阻塞。
+  - `GEMINI_API_KEY`（**可选·仅显式启用 Gemini 时**）：只有当你显式设置 `ai_base_url` 指向 Gemini 原生 API，才需要它作兜底；不设置则**不参与**主流程（打璇玑必失败）。
+  - 可选：`AI_MODEL`（覆盖默认模型）、`ai_base_url`/`AI_BASE_URL`（显式切换 Gemini 等端点）、`AI_BASE_URL_POOL`（同构镜像池）、`AI_PROXY_POOL`、`AI_REQUEST_TIMEOUT`、`AI_FORCE_NON_STREAM`。
+- 📌 **AI 路由现状**：默认璇玑国内网关（ai.jinbufenzi.com）为主通道生成日报；仅当显式配置 `ai_base_url` 指向 Gemini 时才用 Gemini 兜底。二者**非**「Gemini 首选」，请勿混淆。WordPress 发布独立走 WP REST API，互不阻塞。
 - ⚠️ **聊天里已明文出现的密钥有泄露风险**：GitHub PAT、AI Key、WP 应用密码都曾粘贴在对话中。
   建议方案上线后到对应平台**重置/吊销**这三个凭证，再重新生成新值填入 Secrets。
 

@@ -24,6 +24,7 @@ import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
 import notify
+import source_manager as SM
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STEPS = [
@@ -116,6 +117,12 @@ def main():
             _heartbeat_push()
         except Exception:
             pass
+        # 源管理系统：每轮扫描死源/观测期毕业，写建议（FUYR_SOURCE_AUTOMATION=1 才落地）
+        try:
+            _srcs = C.load_json(C.SOURCES_FILE, [])
+            SM.maybe_automate(_srcs)
+        except Exception as e:
+            print("SOURCE_MGR: 自动化调用失败（不影响主流程）: %s" % e)
 
     # 关键步骤（generate/wp/wechat）任一失败 → 返回非 0，让 CNB 构建标红，
     # 避免"假成功"。通知已在 finally 中发出，红/绿由构建状态与机器人共同体现。

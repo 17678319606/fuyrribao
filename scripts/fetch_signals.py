@@ -12,6 +12,7 @@ import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
+import source_manager as SM
 
 LOG = C.get_logger()
 UTC = datetime.timezone.utc
@@ -353,6 +354,9 @@ def cleanup():
 def main():
     C.ensure_dirs()
     sources = C.load_json(C.SOURCES_FILE, [])
+    # 内容源管理系统：按综合打分预分配每源候选容量上限（高分源更高 cap，防垄断+提质量）
+    _caps = SM.allocate_caps(sources)
+    _id2cap = {s.get("id"): _caps.get(s.get("id")) for s in sources}
     seen = C.load_seen()
     quota_map = {s.get("name"): s.get("quota", "normal") for s in sources}  # P1-A：高配额源识别
     cold = len(seen) == 0
@@ -390,8 +394,11 @@ def main():
         # 注意：此处 src_status[sid] 用的是外层源 id（第 360 行），
         # 内层循环变量已改名为 iid，避免源 id 被条目 id 遮蔽（P1-B 修复）。
         src_status[sid] = {"ok": True, "reason": "", "got": len(items), "fresh": len(fresh)}
-        # 每个源限流，保证多样性并控制 AI 上下文长度
-        fresh = fresh[: C.MAX_PER_SOURCE]
+        # 按源综合打分分配每源候选容量上限（高分源更高 cap，防垄断 + 提质量）
+        _cap = _id2cap.get(sid, C.MAX_PER_SOURCE)
+        fresh = fresh[: _cap]
+        for _it in fresh:
+            _it["source_score"] = _cap
         candidates.extend(fresh)
 
     if cold:
@@ -458,6 +465,12 @@ def main():
             LOG.warning("⚠️ 今日有 %d 个源抓取失败: %s", len(failed), failed)
     except Exception as e:
         LOG.warning("写源状态失败（不影响主流程）: %s", e)
+
+    # 源管理系统：记录当次每源指标（抓取成功率/产量），供打分与容量分配使用
+    try:
+        SM.record_run(src_status)
+    except Exception as e:
+        LOG.warning("源指标记录失败（不影响主流程）: %s", e)
 
     # 清理
     cleanup()
