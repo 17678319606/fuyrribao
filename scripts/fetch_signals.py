@@ -309,6 +309,57 @@ PARSERS = {
 }
 
 
+# ───────────────────────── 广告 / 博彩 / 引流黑名单（零 LLM 预筛） ─────────────────────────
+# TG / 论坛类源常混入博彩推广、引流软文；这类内容语义上像真内容，
+# 仅靠 AI 守门易被放过（截图实锤：铂莱娱乐/贵宾会 750.cc 漏进精选）。
+# 故在采集层用关键词+正则硬性拦截，零成本、零额度、永不送入 AI。
+_AD_TERMS = [
+    # 博彩/赌博（ unambiguous，命中即删）
+    "博彩", "菠菜", "赌博", "娱乐城", "贵宾会", "棋牌", "百家乐", "老虎机",
+    "投注", "下注", "盘口", "返水", "上押", "网投", "黑平台", "黑台", "野鸡",
+    "开元", "永利", "威尼斯", "新葡京", "金沙", "视讯厅", "真人视讯", "信用盘",
+    # 拉人/引流话术（包装成项目机会或观点，本质广告）
+    # 注意：月入过万/日赚 等词在合法副业案例复盘里高频出现，误杀风险高，故不入硬名单；
+    # 仅保留 unambiguous 的诈骗/博彩包装词（注册送/首充/稳赚不赔/一夜暴富/带你玩等）。
+    "信誉担保", "全网担保", "集团背书", "全网首发", "强热启航",
+    "注册送", "首充", "充值送", "稳赚不赔", "一夜暴富",
+    "躺着赚", "稳赚", "包赚", "带赚", "导师带", "带你玩",
+    # 联系方式引流（加微信/二维码/私聊客服等）
+    "加微信", "微信号", "扫码添加", "扫码领取", "二维码", "私聊客服", "小妹",
+    "小哥哥带你", "一对一指导", "免费领", "限时福利",
+]
+# 命中任一即判广告；此表刻意只收高置信黑产/拉人词，避免误伤正常副业内容
+# （如返利在淘宝客语境属正常，不入表以降低误杀）。
+_AD_RE = re.compile("|".join(re.escape(t) for t in _AD_TERMS))
+# 典型垃圾短域名 + 担保话术组合（博彩站常用 .cc/.vip/.top 等）
+_SPAM_DOMAIN = re.compile(r"[a-z0-9-]{3,}\.(cc|vip|top|xyz|asia|bet|casino|tv|club)\b", re.I)
+
+def is_ad_spam(text):
+    """标题+正文含高置信广告/博彩/引流信号 → True（应丢弃）。"""
+    if not text:
+        return False
+    if _AD_RE.search(text):
+        return True
+    # 短域名 + 担保/送/赚 任一相伴 → 强广告信号（避免单独 .cc 误杀正常内容）
+    if _SPAM_DOMAIN.search(text) and re.search(r"担保|送|赚|充值|开户|代理|邀请", text):
+        return True
+    return False
+
+def filter_ads(signals):
+    """就地过滤广告/博彩信号，返回 (保留列表, 丢弃数)。"""
+    kept, dropped = [], 0
+    for it in signals:
+        blob = "%s %s" % (it.get("title", ""), it.get("content", ""))
+        if is_ad_spam(blob):
+            dropped += 1
+            LOG.warning("【广告拦截】丢弃疑似博彩/引流广告：%s | %s",
+                        it.get("source_name", ""), (it.get("title") or "")[:50])
+            continue
+        kept.append(it)
+    if dropped:
+        LOG.warning("【广告拦截】本批共丢弃 %d 条广告/博彩/引流信号", dropped)
+    return kept, dropped
+
 def cleanup():
     """删除 RETENTION_DAYS 天前的数据文件，并裁剪去重表。"""
     import glob
@@ -452,6 +503,11 @@ def main():
         candidates = candidates[: C.BALANCE_TARGET]
         LOG.info("候选 %d 条触发均衡（阈值 %d），按源采样至 %d 条（保多样性 + 控额度）",
                  orig, C.BALANCE_TRIGGER, len(candidates))
+
+    # 广告 / 博彩 / 引流黑名单预筛（零 LLM，永不送入 AI；截图实锤漏过需硬拦）
+    candidates, _dropped = filter_ads(candidates)
+    if _dropped:
+        LOG.info("广告预筛后候选数=%d（已删 %d）", len(candidates), _dropped)
 
     # 写入今日候选
     cand_path = os.path.join(C.DATA_DIR, f"candidates-{today}.json")
