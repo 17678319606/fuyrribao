@@ -1006,6 +1006,16 @@ def _is_hollow_item(item, module=None):
         if fluff_count >= 2:
             return True, f"所有字段过短({len(all_text)}字)且含{fluff_count}条套话"
 
+    # 3) 内容过短兜底（防御碎片/标题党）：非聚合源且「标题+全部字段」合计 < 40 字 → 空心。
+    #    聚合源(zhongnianren)的短金句/短观点豁免，避免误杀真实人情味洞察（碎片穿透门禁 C）。
+    if not C.is_aggregator_source(item.get("source_name")):
+        all_content = " ".join([
+            (item.get("title") or ""), (item.get("signal") or ""),
+            mvp, acq, mon, val, per,
+        ]).strip()
+        if 0 < len(all_content) < 40:
+            return True, "非聚合源内容过短(%d字)，疑似碎片/标题党" % len(all_content)
+
     return False, ""
 
 
@@ -1979,9 +1989,14 @@ def main():
                 if gen < GEN_RETRIES:
                     time.sleep(BACKOFF_BASE)
                     continue
-                # 首跑（无累积）仍拒绝空壳；已有累积则跳过该批次，保留旧内容
+                # 首跑（无累积）仍拒绝空壳，但【不硬崩整个流程】——置空交由下方安全护栏
+                # （final_total==0 / report is None 分支）跳过发布、保留线上真实内容，
+                # 避免 run4 式「骨架重试耗尽 → exit 1 → 整跑 0 产出、后续周报步骤也跑不到」。
                 if acc_total == 0:
-                    raise SystemExit("skeleton report rejected: only titles, no field content")
+                    LOG.error("最终批次仍为骨架（items=%d，零字段=%d，字段实例=%d），无累积内容可保留——跳过本次发布（不硬崩，交由安全护栏兜底）。",
+                              t, z, inst)
+                    report = None
+                    break
                 LOG.warning("新增批次疑似骨架，跳过该批次（保留已累积 %d 条）。", acc_total)
                 report = None
                 break
@@ -2125,3 +2140,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
