@@ -1,12 +1,12 @@
 # 副业日报·AI 限速器实测（不发布）
 # ─────────────────────────────────────────────────────────────────────
-# 目的：在真实 GitHub Actions 环境跑一次「采集 + AI 生成」，验证：
+# 目的：在真实 GitHub Actions 环境跑「采集 + AI 生成 + 主题周报合成」，验证：
 #   1) AIRateLimiter 注入成功（RPM 滑窗=10 / 每日预算=800 / 并发闸=1）；
-#   2) 免费版 Gemini 全程不撞 429；
-#   3) 当日日报正常产出（state/daily_report_{today}.json 有条目）；
-#   4) 【内容质量修复验证】副业视角(perspective)填充率应=100%；
-#      广告/博彩/引流在 fetch 阶段已被 filter_ads 硬拦截（日志见「广告拦截」）。
-# 不调用 publish_wp.py，绝不会污染线上 WordPress / 公众号。
+#   2) 免费版 Gemini 全程不撞 429（或 failover 璇玑兜底仍产出）；
+#   3) 当日日报正常产出，并【dump 全文】到日志供跨轮对比；
+#   4) 主题周报（generate_roundup）能合成（经 publish 拦截 shim，绝不发线上）；
+#   5) 跨轮对比：日报/周报内容是否重复、视角是否空心、主题是否聚焦。
+# 不调用真实发布：generate_roundup 的 _publish 被 shim 拦截落盘；WP_URL 指 localhost。
 # 触发：push 到本文件或 scripts/patches/apply_rate_limit.py 自动跑；
 #       也可 manual workflow_dispatch 手动跑（支持多次实测）。
 name: 副业日报·限速器实测（不发布）
@@ -46,6 +46,12 @@ env:
   GEMINI_RPM: ${{ github.event.inputs.rpm || '10' }}
   GEMINI_RPD: ${{ github.event.inputs.rpd || '800' }}
   GEMINI_MAX_CONCURRENCY: '1'
+  # —— 测试专用：降低周报门槛，让单日少量条目也能跑合成；WP 指本地避免真实发布 ——
+  ROUNDUP_MIN_ITEMS: '3'
+  ROUNDUP_MIN_ENTRIES: '3'
+  ROUNDUP_TOP_K: '14'
+  WP_URL: 'http://localhost:9'
+  WP_AUTH: 'dummy-test-noop'
 
 jobs:
   live-test:
@@ -68,10 +74,104 @@ jobs:
       - name: 注入 AI 限速器（免费 Gemini 配额保护，防 429）
         run: python scripts/patches/apply_rate_limit.py
 
-      - name: 采集 + AI 生成（不发布）
+      - name: 采集 + AI 生成日报（不发布）
         run: |
           python scripts/fetch_signals.py
           python scripts/generate_report.py
+
+      - name: DUMP 日报全文（供跨轮对比）
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, sys, json
+          sys.path.insert(0, "scripts")
+          import common as C
+          today = C.date_str()
+          p = os.path.join(C.STATE_DIR, "daily_report_%s.json" % today)
+          print("===== DAILY_REPORT_DUMP %s =====" % today)
+          if not os.path.exists(p):
+              print("(no daily report)")
+          else:
+              d = json.load(open(p, encoding="utf-8"))
+              for mod, lst in (d.get("modules") or {}).items():
+                  for it in (lst or []):
+                      if not isinstance(it, dict): continue
+                      sig = (it.get("signal") or it.get("summary") or "")
+                      persp = (it.get("perspective") or "")
+                      print("--- [%s] %s" % (mod, it.get("title","")))
+                      print("    source: %s | url: %s" % (it.get("source",""), it.get("source_url","")))
+                      print("    signal: %s" % sig[:240])
+                      print("    perspective: %s" % persp[:240])
+              print("===== END_DAILY_REPORT_DUMP =====")
+          PY
+
+      - name: BUILD 周报 store（用当日日报条目喂 items_store.jsonl）
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, sys, json
+          sys.path.insert(0, "scripts")
+          import common as C
+          today = C.date_str()
+          p = os.path.join(C.STATE_DIR, "daily_report_%s.json" % today)
+          items = []
+          if os.path.exists(p):
+              d = json.load(open(p, encoding="utf-8"))
+              for mod, lst in (d.get("modules") or {}).items():
+                  for it in (lst or []):
+                      if not isinstance(it, dict): continue
+                      items.append({
+                          "date": today,
+                          "module": mod,
+                          "title": it.get("title","") or "",
+                          "source_url": it.get("source_url","") or "",
+                          "summary": it.get("signal") or it.get("summary") or "",
+                          "perspective": it.get("perspective","") or "",
+                          "replicability": it.get("replicability","") or "",
+                      })
+          C.ensure_dirs()
+          sp = os.path.join(C.STATE_DIR, "items_store.jsonl")
+          with open(sp, "w", encoding="utf-8") as f:
+              for e in items:
+                  f.write(json.dumps(e, ensure_ascii=False) + "\n")
+          print("BUILD_STORE wrote %d entries -> items_store.jsonl" % len(items))
+          PY
+
+      - name: RUN 主题周报合成（publish 拦截 shim，绝不发线上）
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import common as C
+          import generate_roundup as G
+
+          # 拦截真实发布：把 HTML 落盘，返回 dummy，绝不请求真实 WP
+          def _fake_publish(wp_url, wp_auth, title, html, cat_name):
+              C.ensure_dirs()
+              out = os.path.join(C.STATE_DIR, "roundup_last.html")
+              open(out, "w", encoding="utf-8").write(html)
+              print("ROUNDUP_PUBLISH_INTERCEPTED title=%s len=%d" % (title, len(html)))
+              return ("0", "file:///dev/null")
+          G._publish = _fake_publish
+          G.main()
+          PY
+
+      - name: DUMP 主题周报全文（供跨轮对比）
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import common as C
+          p = os.path.join(C.STATE_DIR, "roundup_last.html")
+          print("===== ROUNDUP_DUMP =====")
+          if not os.path.exists(p):
+              print("(no roundup html)")
+          else:
+              print(open(p, encoding="utf-8").read())
+          print("===== END_ROUNDUP_DUMP =====")
+          PY
 
       - name: 收集实测快照（限速器 + 日报条目 + perspective 填充率）
         if: always()
@@ -110,7 +210,7 @@ jobs:
               "perspective_total": persp_total,
               "perspective_fill_rate": (round(persp_filled / persp_total, 3) if persp_total else None),
           }
-          os.makedirs(C.STATE_DIR, exist_ok=True)
+          C.ensure_dirs()
           json.dump(out, open(os.path.join(C.STATE_DIR, "_live_test_result.json"), "w"),
                     ensure_ascii=False, indent=2)
           print("===== LIVE_TEST_SNAPSHOT =====")
