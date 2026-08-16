@@ -100,8 +100,8 @@ jobs:
                       persp = (it.get("perspective") or "")
                       print("--- [%s] %s" % (mod, it.get("title","")))
                       print("    source: %s | url: %s" % (it.get("source",""), it.get("source_url","")))
-                      print("    signal: %s" % sig[:240])
-                      print("    perspective: %s" % persp[:240])
+                      print("    signal: %s" % sig[:600])
+                      print("    perspective: %s" % persp[:600])
               print("===== END_DAILY_REPORT_DUMP =====")
           PY
 
@@ -217,3 +217,4 @@ jobs:
           print(json.dumps(out, ensure_ascii=False))
           print("===== END_SNAPSHOT =====")
           PY
+
