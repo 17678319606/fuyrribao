@@ -23,7 +23,7 @@ env:
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   # —— AI 主用 Gemini 原生 API；璇玑兜底（与 daily-report.yml 保持一致）——
   AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
-  AI_MODEL: gemini-2.5-flash
+  AI_MODEL: gemini-flash-latest
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
   AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
