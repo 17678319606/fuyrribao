@@ -1517,6 +1517,24 @@ def _is_skeleton(report):
     return False
 
 
+def _normalize_perspective(report):
+    """Fix H：views_insights 允许 value_proposition 顶替 perspective 过空心门禁，
+    但日报渲染只认 perspective → 顶替后卡片「副业视角」空白（run 31978375568 实锤：
+    一条 views_insights 项 perspective 为空、value_proposition 有内容，渲染出空壳卡片）。
+    此处在写出前归一：views_insights 项若 perspective 空且 value_proposition 非空，
+    则回填 perspective，保证渲染不空、读者始终拿到老兵总结。
+    """
+    for k in C.MODULES:
+        if k != "views_insights":
+            continue
+        for it in report.get("modules", {}).get(k, []):
+            per = (it.get("perspective") or "").strip()
+            if not per:
+                val = (it.get("value_proposition") or "").strip()
+                if val:
+                    it["perspective"] = val
+
+
 def _empty_report(date):
     return {
         "date": date,
@@ -2095,6 +2113,8 @@ def main():
 
         # 合并到当日累积（旧内容保留 + 新内容去重追加）
         merged = C.merge_reports(accumulated, report)
+        # Fix H：归一 views_insights 的 perspective（value_proposition 顶替回填）
+        _normalize_perspective(merged)
         # ① 增量持久化：合并后立即落盘 + 记录已生成信号进度，使中途崩溃重跑时
         #    能跳过已生成条目（existing_keys 基于已存日报去重），省下重烧的 token。
         try:
@@ -2166,5 +2186,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
