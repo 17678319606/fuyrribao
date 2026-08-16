@@ -21,8 +21,13 @@ concurrency:
 env:
   TZ: Asia/Shanghai
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-  ai_api_key: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  # —— AI 主用 Gemini 原生 API；璇玑兜底（与 daily-report.yml 保持一致）——
+  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
+  AI_MODEL: gemini-2.5-flash
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
+  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  AI_FALLBACK_MODEL: auto
   WXWORK_WEBHOOK: ${{ secrets.WXWORK_WEBHOOK }}
 
 jobs:
