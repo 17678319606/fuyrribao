@@ -979,9 +979,11 @@ def _has_fluff(text):
     return False
 
 
-def _is_hollow_item(item):
+def _is_hollow_item(item, module=None):
     """检测一条 item 是否为空心内容（对副业读者零 actionable value）。
     返回 (is_hollow: bool, reason: str)。
+    v4.4：perspective（副业视角）升级为全模块必填——空着即判空心，
+    强制 AI 产出老兵总结，杜绝读者看到"只有来源的空壳卡片"（截图实锤缺陷）。
     """
     t = (item.get("title") or "") + " " + (item.get("signal") or "")
     mvp = (item.get("how_to_mvp") or "").strip()
@@ -994,12 +996,18 @@ def _is_hollow_item(item):
     # 识别明显没填 actionable 字段的硬伤——真正判断力交给 AI 的 7 类共性框架。
 
     # 1) 核心行动字段全空或全为套话 → 空心（结构性）
-    #    实质性 = 长度≥10 且不含套话；观点心法模块允许用 perspective/value_proposition 替代
+    #    实质性 = 长度≥10 且不含套话；观点心法模块允许用 value_proposition 替代 perspective
     substantial = [f for f in (mvp, acq, mon) if len(f.strip()) >= 10 and not _has_fluff(f)]
-    if len(substantial) == 0:
-        is_views = (len(per) >= 20 and not _has_fluff(per)) or (len(val) >= 20 and not _has_fluff(val))
-        if not is_views:
-            return True, "核心行动字段(MVP/获客/变现)全空或全是套话，且观点/价值主张也不足"
+    per_ok = (len(per) >= 20 and not _has_fluff(per))
+    val_ok = (len(val) >= 20 and not _has_fluff(val))
+    if len(substantial) == 0 and not per_ok and not val_ok:
+        return True, "核心行动字段(MVP/获客/变现)全空或全是套话，且观点/价值主张也不足"
+
+    # 2) perspective（副业视角）必填：栏目差异化价值，空着即判空心（强制 AI 产出老兵总结）。
+    #    views_insights 模块允许 value_proposition 顶替（该模块常为原文引用，价值在 val）；
+    #    其余模块（项目机会/增长运营）perspective 为空一律判空心。
+    if not per_ok and not (module == "views_insights" and val_ok):
+        return True, "副业视角(perspective)为空或套话——必填字段未产出，AI 未填老兵总结"
 
     # 2) 所有字段过短且全为套话
     all_text = " ".join([mvp, acq, mon, val, per])
@@ -1020,7 +1028,7 @@ def _actionable_check(report):
         items = mods.get(key, [])
         keep = []
         for it in items:
-            hollow, reason = _is_hollow_item(it)
+            hollow, reason = _is_hollow_item(it, module=key)
             if hollow:
                 removed += 1
                 LOG.warning("【空心剔除】%s -> %s | 标题: %s", key, reason,
@@ -1486,7 +1494,9 @@ def _is_skeleton(report):
     """骨架判定：纯标题、无实质字段内容的日报视为不合格。
 
     规则：① 存在 item 但「零字段 item 占比 > 30%（且多于 1 条）」→ 骨架；
-         ② 平均每个 item 字段数 < 1 → 骨架（信息密度过低）。
+         ② 平均每个 item 字段数 < 1 → 骨架（信息密度过低）；
+         ③ 「副业视角(perspective) 缺失率 > 50%（且多于 1 条）」→ 骨架，
+            触发重生成逼 AI 补填老兵总结（而非静默丢弃导致空壳卡片）。
     两者皆非才放行。
     """
     total, zero, inst = _analyze_richness(report)
@@ -1495,6 +1505,14 @@ def _is_skeleton(report):
     if zero > max(1, int(total * 0.3)):
         return True
     if inst < total:
+        return True
+    # ③ perspective 缺失率（基于画布字段统计）
+    no_persp = 0
+    for key in ("project_opportunities", "growth_operations", "views_insights"):
+        for it in report.get("modules", {}).get(key, []):
+            if not (it.get("perspective") or "").strip():
+                no_persp += 1
+    if total >= 2 and no_persp > total * 0.5:
         return True
     return False
 
