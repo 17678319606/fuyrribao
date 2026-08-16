@@ -22,41 +22,283 @@
     "fixed": true,
     "rationale": "固定基础源(地基)：中文独立开发者产品库，主题强契合，保障内容不空。"
   },
-  { "id": "v2ex", "type": "rss", "url": "https://www.v2ex.com/index.xml", "name": "V2EX" },
-  { "id": "sspai", "type": "rss", "url": "https://sspai.com/feed", "name": "少数派" },
-  { "id": "hn", "type": "rss", "url": "https://hnrss.org/frontpage", "name": "Hacker News" },
-  { "id": "producthunt", "type": "rss", "url": "https://www.producthunt.com/feed", "name": "Product Hunt" },
-  { "id": "indiehackers", "type": "rss", "url": "https://www.indiehackers.com/feed.xml", "name": "IndieHackers" },
-  { "id": "ruanyifeng", "type": "rss", "url": "https://www.ruanyifeng.com/blog/atom.xml", "name": "阮一峰科技周刊" },
-  { "id": "tmtpost", "type": "rss", "url": "https://www.tmtpost.com/rss", "name": "钛媒体" },
-  { "id": "ifanr", "type": "rss", "url": "https://www.ifanr.com/feed", "name": "爱范儿" },
-  { "id": "oschina", "type": "rss", "url": "https://www.oschina.net/news/rss", "name": "开源中国" },
-  { "id": "qbitai", "type": "rss", "url": "https://www.qbitai.com/feed", "name": "量子位" },
-  { "id": "jiqizhixin", "type": "rss", "url": "https://www.jiqizhixin.com/rss", "name": "机器之心" },
-  { "id": "github_trending_zh", "type": "github_trending", "url": "https://github.com/trending?since=daily&spoken_language_code=zh", "name": "GitHub 中文趋势榜" },
-  { "id": "w2solo", "type": "rss", "url": "https://www.w2solo.com/topics/feed", "name": "w2solo 独立开发者社区" },
-  { "id": "appinn", "type": "rss", "url": "https://www.appinn.com/feed/", "name": "小众软件（网站）" },
-  { "id": "appinn_forum", "type": "rss", "url": "https://meta.appinn.net/latest.rss", "name": "小众软件（论坛）" },
-  { "id": "geekpark", "type": "rss", "url": "https://www.geekpark.net/rss", "name": "极客公园" },
-  { "id": "woshipm", "type": "rss", "url": "https://www.woshipm.com/feed", "name": "人人都是产品经理" },
-  { "id": "growthhackers", "type": "rss", "url": "https://growthhackers.com/feed", "name": "GrowthHackers" },
-  { "id": "devto", "type": "rss", "url": "https://dev.to/feed", "name": "Dev.to" },
-  { "id": "lobsters", "type": "rss", "url": "https://lobste.rs/rss", "name": "Lobsters" },
-  { "id": "hn_show", "type": "rss", "url": "https://hnrss.org/show", "name": "Hacker News Show" },
-
-  { "id": "reddit_sideproject", "type": "reddit_json", "url": "https://www.reddit.com/r/SideProject/hot.json?limit=25", "name": "Reddit r/SideProject", "added_by": "curated", "added_date": "2026-08-16", "rationale": "独立开发者项目展示社区，高相关" },
-  { "id": "reddit_indiehackers", "type": "reddit_json", "url": "https://www.reddit.com/r/indiehackers/hot.json?limit=25", "name": "Reddit r/indiehackers", "added_by": "curated", "added_date": "2026-08-16", "rationale": "indie hacker 社区" },
-  { "id": "reddit_entrepreneur", "type": "reddit_json", "url": "https://www.reddit.com/r/Entrepreneur/hot.json?limit=25", "name": "Reddit r/Entrepreneur", "added_by": "curated", "added_date": "2026-08-16", "rationale": "创业/副业讨论社区" },
-  { "id": "reddit_artificial", "type": "reddit_json", "url": "https://www.reddit.com/r/artificial/hot.json?limit=25", "name": "Reddit r/artificial", "added_by": "curated", "added_date": "2026-08-16", "rationale": "AI 资讯社区，高相关" },
-  { "id": "reddit_localllama", "type": "reddit_json", "url": "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=25", "name": "Reddit r/LocalLLaMA", "added_by": "curated", "added_date": "2026-08-16", "rationale": "LLM/AI 工具实践" },
-  { "id": "reddit_selfhosted", "type": "reddit_json", "url": "https://www.reddit.com/r/selfhosted/hot.json?limit=25", "name": "Reddit r/selfhosted", "added_by": "curated", "added_date": "2026-08-16", "rationale": "自托管/技术副业" },
-  { "id": "smashing", "type": "rss", "url": "https://www.smashingmagazine.com/feed/", "name": "Smashing Magazine", "added_by": "curated", "added_date": "2026-08-16", "rationale": "前端/工程高质量博客" },
-  { "id": "hn_best", "type": "rss", "url": "https://hnrss.org/best", "name": "Hacker News Best", "added_by": "curated", "added_date": "2026-08-16", "rationale": "HN 最高赞长文，质量天花板" },
-  { "id": "theresanaiforthat", "type": "rss", "url": "https://theresanaiforthat.com/feed/", "name": "There's An AI For That", "added_by": "curated", "added_date": "2026-08-16", "rationale": "AI 工具聚合，强相关" },
-  { "id": "lennys", "type": "rss", "url": "https://www.lennysnewsletter.com/feed", "name": "Lenny's Newsletter", "added_by": "curated", "added_date": "2026-08-16", "rationale": "产品/增长/职业高质量 newsletter" },
-  { "id": "yc_blog", "type": "rss", "url": "https://www.ycombinator.com/blog/rss.xml", "name": "Y Combinator Blog", "added_by": "curated", "added_date": "2026-08-16", "rationale": "顶级孵化器官方博客" },
-  { "id": "stackdiary", "type": "rss", "url": "https://stackdiary.com/feed/", "name": "Stack Diary", "added_by": "curated", "added_date": "2026-08-16", "rationale": "AI/生产力工具实战评测" },
-  { "id": "saastr", "type": "rss", "url": "https://www.saastr.com/feed/", "name": "SaaStr", "added_by": "curated", "added_date": "2026-08-16", "rationale": "SaaS/创业增长高质量博客" },
-  { "id": "indiehackers_blog", "type": "rss", "url": "https://www.indiehackers.com/blog/rss", "name": "Indie Hackers Blog", "added_by": "curated", "added_date": "2026-08-16", "rationale": "独立开发者官方博客" },
-  { "id": "spi", "type": "rss", "url": "https://www.smartpassiveincome.com/feed/", "name": "Smart Passive Income", "added_by": "curated", "added_date": "2026-08-16", "rationale": "被动收入/副业经典 newsletter" }
+  {
+    "id": "v2ex",
+    "type": "rss",
+    "url": "https://www.v2ex.com/index.xml",
+    "name": "V2EX"
+  },
+  {
+    "id": "sspai",
+    "type": "rss",
+    "url": "https://sspai.com/feed",
+    "name": "少数派"
+  },
+  {
+    "id": "hn",
+    "type": "rss",
+    "url": "https://hnrss.org/frontpage",
+    "name": "Hacker News"
+  },
+  {
+    "id": "producthunt",
+    "type": "rss",
+    "url": "https://www.producthunt.com/feed",
+    "name": "Product Hunt"
+  },
+  {
+    "id": "indiehackers",
+    "type": "rss",
+    "url": "https://www.indiehackers.com/feed.xml",
+    "name": "IndieHackers"
+  },
+  {
+    "id": "ruanyifeng",
+    "type": "rss",
+    "url": "https://www.ruanyifeng.com/blog/atom.xml",
+    "name": "阮一峰科技周刊"
+  },
+  {
+    "id": "tmtpost",
+    "type": "rss",
+    "url": "https://www.tmtpost.com/rss",
+    "name": "钛媒体"
+  },
+  {
+    "id": "ifanr",
+    "type": "rss",
+    "url": "https://www.ifanr.com/feed",
+    "name": "爱范儿"
+  },
+  {
+    "id": "oschina",
+    "type": "rss",
+    "url": "https://www.oschina.net/news/rss",
+    "name": "开源中国"
+  },
+  {
+    "id": "qbitai",
+    "type": "rss",
+    "url": "https://www.qbitai.com/feed",
+    "name": "量子位"
+  },
+  {
+    "id": "jiqizhixin",
+    "type": "rss",
+    "url": "https://www.jiqizhixin.com/rss",
+    "name": "机器之心"
+  },
+  {
+    "id": "github_trending_zh",
+    "type": "github_trending",
+    "url": "https://github.com/trending?since=daily&spoken_language_code=zh",
+    "name": "GitHub 中文趋势榜"
+  },
+  {
+    "id": "w2solo",
+    "type": "rss",
+    "url": "https://www.w2solo.com/topics/feed",
+    "name": "w2solo 独立开发者社区"
+  },
+  {
+    "id": "appinn",
+    "type": "rss",
+    "url": "https://www.appinn.com/feed/",
+    "name": "小众软件（网站）"
+  },
+  {
+    "id": "appinn_forum",
+    "type": "rss",
+    "url": "https://meta.appinn.net/latest.rss",
+    "name": "小众软件（论坛）"
+  },
+  {
+    "id": "geekpark",
+    "type": "rss",
+    "url": "https://www.geekpark.net/rss",
+    "name": "极客公园"
+  },
+  {
+    "id": "woshipm",
+    "type": "rss",
+    "url": "https://www.woshipm.com/feed",
+    "name": "人人都是产品经理"
+  },
+  {
+    "id": "growthhackers",
+    "type": "rss",
+    "url": "https://growthhackers.com/feed",
+    "name": "GrowthHackers"
+  },
+  {
+    "id": "devto",
+    "type": "rss",
+    "url": "https://dev.to/feed",
+    "name": "Dev.to"
+  },
+  {
+    "id": "lobsters",
+    "type": "rss",
+    "url": "https://lobste.rs/rss",
+    "name": "Lobsters"
+  },
+  {
+    "id": "hn_show",
+    "type": "rss",
+    "url": "https://hnrss.org/show",
+    "name": "Hacker News Show"
+  },
+  {
+    "id": "reddit_sideproject",
+    "type": "reddit_json",
+    "url": "https://www.reddit.com/r/SideProject/hot.json?limit=25",
+    "name": "Reddit r/SideProject",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "独立开发者项目展示社区，高相关"
+  },
+  {
+    "id": "reddit_indiehackers",
+    "type": "reddit_json",
+    "url": "https://www.reddit.com/r/indiehackers/hot.json?limit=25",
+    "name": "Reddit r/indiehackers",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "indie hacker 社区"
+  },
+  {
+    "id": "reddit_entrepreneur",
+    "type": "reddit_json",
+    "url": "https://www.reddit.com/r/Entrepreneur/hot.json?limit=25",
+    "name": "Reddit r/Entrepreneur",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "创业/副业讨论社区"
+  },
+  {
+    "id": "reddit_artificial",
+    "type": "reddit_json",
+    "url": "https://www.reddit.com/r/artificial/hot.json?limit=25",
+    "name": "Reddit r/artificial",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "AI 资讯社区，高相关"
+  },
+  {
+    "id": "reddit_localllama",
+    "type": "reddit_json",
+    "url": "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=25",
+    "name": "Reddit r/LocalLLaMA",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "LLM/AI 工具实践"
+  },
+  {
+    "id": "reddit_selfhosted",
+    "type": "reddit_json",
+    "url": "https://www.reddit.com/r/selfhosted/hot.json?limit=25",
+    "name": "Reddit r/selfhosted",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "自托管/技术副业"
+  },
+  {
+    "id": "smashing",
+    "type": "rss",
+    "url": "https://www.smashingmagazine.com/feed/",
+    "name": "Smashing Magazine",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "前端/工程高质量博客"
+  },
+  {
+    "id": "hn_best",
+    "type": "rss",
+    "url": "https://hnrss.org/best",
+    "name": "Hacker News Best",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "HN 最高赞长文，质量天花板"
+  },
+  {
+    "id": "theresanaiforthat",
+    "type": "rss",
+    "url": "https://theresanaiforthat.com/feed/",
+    "name": "There's An AI For That",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "AI 工具聚合，强相关"
+  },
+  {
+    "id": "lennys",
+    "type": "rss",
+    "url": "https://www.lennysnewsletter.com/feed",
+    "name": "Lenny's Newsletter",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "产品/增长/职业高质量 newsletter"
+  },
+  {
+    "id": "yc_blog",
+    "type": "rss",
+    "url": "https://www.ycombinator.com/blog/rss.xml",
+    "name": "Y Combinator Blog",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "顶级孵化器官方博客"
+  },
+  {
+    "id": "stackdiary",
+    "type": "rss",
+    "url": "https://stackdiary.com/feed/",
+    "name": "Stack Diary",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "AI/生产力工具实战评测"
+  },
+  {
+    "id": "saastr",
+    "type": "rss",
+    "url": "https://www.saastr.com/feed/",
+    "name": "SaaStr",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "SaaS/创业增长高质量博客"
+  },
+  {
+    "id": "indiehackers_blog",
+    "type": "rss",
+    "url": "https://www.indiehackers.com/blog/rss",
+    "name": "Indie Hackers Blog",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "独立开发者官方博客"
+  },
+  {
+    "id": "spi",
+    "type": "rss",
+    "url": "https://www.smartpassiveincome.com/feed/",
+    "name": "Smart Passive Income",
+    "added_by": "curated",
+    "added_date": "2026-08-16",
+    "rationale": "被动收入/副业经典 newsletter"
+  },
+  {
+    "id": "opml_energynews_africa_8906a61d75",
+    "type": "rss",
+    "url": "https://energynews.africa/feed/",
+    "name": "energynews.africa",
+    "added_by": "opml-import",
+    "added_date": "2026-08-17",
+    "score": 21
+  },
+  {
+    "id": "opml_www_lesinrocks_com_6e8debfab2",
+    "type": "rss",
+    "url": "http://www.lesinrocks.com/musique/feed/",
+    "name": "www.lesinrocks.com",
+    "added_by": "opml-import",
+    "added_date": "2026-08-17",
+    "score": 21
+  }
 ]
