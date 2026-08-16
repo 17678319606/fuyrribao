@@ -420,3 +420,69 @@ class AIRateLimiter:
 
 
 ai_limiter = AIRateLimiter()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# DNS-over-HTTPS 兜底（与日报 generate_report.py 的对齐实现，供周报共用）
+# 海外 CI Runner 偶发解析不到国内网关(ai.jinbufenzi.com)，用 Cloudflare/Google
+# DoH 拿到真实 A 记录并钉死到 socket.getaddrinfo，使璇玑兜底端点也能稳定直连。
+# 注意：每个 CI step 是独立进程，日报里装的 patch 不会自动带到周报 step，
+# 故周报必须自己装——这正是此前周报在 CI 必挂「NameResolutionError」的根因。
+# ─────────────────────────────────────────────────────────────────────
+import socket as _socket
+import urllib.request as _urllib_req
+
+_DNS_PATCH_HOSTS = {}
+
+
+def _doh_resolve(host):
+    """通过 DoH 解析 A 记录，返回 IP 列表。多 provider 轮换，任一成功即可。"""
+    providers = [
+        ("Google", "https://dns.google/resolve?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+        ("Cloudflare", "https://cloudflare-dns.com/dns-query?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+        ("1.1.1.1", "https://1.1.1.1/dns-query?name=%s&type=A" % host, {"Accept": "application/dns-json"}),
+    ]
+    ips = []
+    for name, url, hdr in providers:
+        try:
+            req = _urllib_req.Request(url, headers=hdr)
+            with _urllib_req.urlopen(req, timeout=10) as r:
+                d = json.loads(r.read())
+            found = [a["data"] for a in d.get("Answer", []) if a.get("type") == 1]
+            if found:
+                logging.getLogger("fuyr.dns").info("DoH(%s) 解析 %s -> %s", name, host, found)
+                ips.extend(found)
+        except Exception as e:
+            logging.getLogger("fuyr.dns").warning("DoH(%s) 解析 %s 失败: %s", name, host, e)
+    seen, uniq = set(), []
+    for ip in ips:
+        if ip not in seen:
+            seen.add(ip)
+            uniq.append(ip)
+    return uniq
+
+
+def install_dns_patch(host):
+    """仅对国内网关 jinbufenzi 等偶发解析失败的 host 做 DoH 兜底钉 IP；
+    对 googleapis.com 等全球可达域名直接跳过。幂等（同 host 只钉一次）。"""
+    if "jinbufenzi" not in host:
+        return
+    if _DNS_PATCH_HOSTS.get(host):
+        return
+    ips = _doh_resolve(host)
+    if not ips:
+        return
+    target = ips[0]
+    orig = _socket.getaddrinfo
+
+    def _patched(h, *args, **kwargs):
+        if h == host:
+            port = args[0] if args and isinstance(args[0], int) else 443
+            return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", (target, port))]
+        return orig(h, *args, **kwargs)
+
+    _socket.getaddrinfo = _patched
+    _DNS_PATCH_HOSTS[host] = target
+    logging.getLogger("fuyr.dns").info("DoH 兜底：%s 固定解析到 %s（后续直连不再依赖 Runner 本地 DNS）", host, target)
+
+
