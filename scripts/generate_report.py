@@ -988,6 +988,17 @@ def _has_fluff(text):
     return False
 
 
+def _field_substantial(text, min_len=20, fluff_max_len=40):
+    """字段是否算"有实质"。仅对较短字段做套话筛查，
+    长字段里偶发套话词（如"值得关注"）不应整段判废，避免误杀真实干货。"""
+    t = (text or "").strip()
+    if len(t) < min_len:
+        return False
+    if len(t) <= fluff_max_len and _has_fluff(t):
+        return False
+    return True
+
+
 def _is_hollow_item(item, module=None):
     """检测一条 item 是否为空心内容（对副业读者零 actionable value）。
     返回 (is_hollow: bool, reason: str)。
@@ -1006,9 +1017,9 @@ def _is_hollow_item(item, module=None):
 
     # 1) 核心行动字段全空或全为套话 → 空心（结构性）
     #    实质性 = 长度≥10 且不含套话；观点心法模块允许用 value_proposition 替代 perspective
-    substantial = [f for f in (mvp, acq, mon) if len(f.strip()) >= 10 and not _has_fluff(f)]
-    per_ok = (len(per) >= 20 and not _has_fluff(per))
-    val_ok = (len(val) >= 20 and not _has_fluff(val))
+    substantial = [f for f in (mvp, acq, mon) if _field_substantial(f, min_len=10, fluff_max_len=30)]
+    per_ok = _field_substantial(per, min_len=20, fluff_max_len=40)
+    val_ok = _field_substantial(val, min_len=20, fluff_max_len=40)
     if len(substantial) == 0 and not per_ok and not val_ok:
         return True, "核心行动字段(MVP/获客/变现)全空或全是套话，且观点/价值主张也不足"
 
@@ -1102,7 +1113,7 @@ def _substance_check(report):
                                    "content","target_customer","source_name"):
                             _v = it.get(_k)
                             if isinstance(_v, str):
-                                it[_k] = re.sub(r"「来源：[^」]*?", "", _v)
+                                it[_k] = re.sub(r"「来源：[^」\n]*", "", _v)
                         LOG.warning("【安全闸·JSON·应急清理】清理未闭合来源占位符: %s", (it.get("title") or "")[:60])
                         keep.append(it)
                         continue
@@ -2114,7 +2125,10 @@ def main():
                     time.sleep(BACKOFF_BASE)
                     continue
                 if acc_total == 0:
-                    raise SystemExit("all items removed by actionable check")
+                    LOG.error("行动性校验后所有条目被剔除且无历史累积，本轮产出为空"
+                              "（AI 主用不可用时请开启应急模式 DOCGEN_EMERGENCY=1）。")
+                    report = None
+                    break
                 LOG.warning("新增批次全被剔除为空心，跳过该批次（保留已累积 %d 条）。", acc_total)
                 report = None
                 break
@@ -2126,7 +2140,10 @@ def main():
                     time.sleep(BACKOFF_BASE)
                     continue
                 if acc_total == 0:
-                    raise SystemExit("all items removed by substance gate")
+                    LOG.error("实质门禁后所有条目被剔除且无历史累积，本轮产出为空"
+                              "（AI 主用不可用时请开启应急模式 DOCGEN_EMERGENCY=1）。")
+                    report = None
+                    break
                 LOG.warning("新增批次全被实质门禁剔除，跳过该批次（保留已累积 %d 条）。", acc_total)
                 report = None
                 break
