@@ -33,6 +33,10 @@ on:
         description: '清洁模式：忽略历史累积、全新生成（覆盖重写旧文，无需手工删缓存）'
         required: false
         default: 'false'
+      emergency:
+        description: '应急模式：放宽质量门(填空白视角/清理占位符/实质门禁放行)，仅用于 AI 主用不可用时保发布；博彩/引流安全闸仍生效'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write               # 仅用于提交心跳 / 去重状态 / 产物回仓库
@@ -45,6 +49,7 @@ env:
   TZ: Asia/Shanghai
   DOCGEN_TARGET_DATE: ${{ github.event.inputs.target_date }}
   DOCGEN_CLEAN: ${{ github.event.inputs.clean }}
+  DOCGEN_EMERGENCY: ${{ github.event.inputs.emergency == 'true' && '1' || '' }}
   # —— WordPress ——（地址/账号/分类已在代码默认，这里只放应用密码）
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   # —— AI 主用 Gemini 原生 API（AI Studio AQ. 密钥，仅支持原生端点 generativelanguage.googleapis.com/v1beta）——
