@@ -1,5 +1,15 @@
 [
   {
+    "id": "fuye_base",
+    "type": "repo_base",
+    "path": "data/base_content.json",
+    "name": "副业日报基础库",
+    "pinned": true,
+    "quota": "pinned",
+    "fixed": true,
+    "rationale": "仓库内置 curated 基础内容源（免信用排名/不参与淘汰）。优先采用，保障日报内容底线质量。内容手动或半自动维护于 data/base_content.json。"
+  },
+  {
     "id": "zhongnianren",
     "type": "rss",
     "url": "https://17678319606.github.io/tg-aggregator-cn-snapshot/zhongnianren/rss.xml",
