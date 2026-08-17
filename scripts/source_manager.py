@@ -95,9 +95,10 @@ def record_run(source_status):
                 if fresh > 0:
                     m["last_fresh_date"] = today
             elif st.get("reason") == "http_403":
-                # 数据中心 IP 偶发 403（非源本身失效）→ 中性处理：不计失败、不扣信用，
-                # 避免误把正常源判死（见 fetch_signals 的 403 抖动豁免）。
-                pass
+                # 数据中心 IP 偶发 403（非源本身失效）→ 轻度惩罚（×0.4），区别于真实抓取失败。
+                # 完全中性会掩盖"长期只返回 403 的伪活源"；轻度惩罚使其在持续 403 时缓慢降级，
+                # 又不至于因偶发抖动误判死（真实失败仍按 CREDIT_FAIL_PENALTY 全额扣分）。
+                m["credit"] = max(0, m.get("credit", C.CREDIT_INIT) - int(round(C.CREDIT_FAIL_PENALTY * 0.4)))
             else:
                 m["consec_fetch_fail"] += 1
                 m["credit"] = max(0, m.get("credit", C.CREDIT_INIT) - C.CREDIT_FAIL_PENALTY)
@@ -131,6 +132,20 @@ def top_credits(n=5):
             ((sid, m.get("credit", C.CREDIT_INIT)) for sid, m in metrics.items()
              if isinstance(m, dict)),
             key=lambda x: x[1], reverse=True,
+        )
+        return rows[:n]
+    except Exception:
+        return []
+
+
+def bottom_credits(n=5):
+    """返回信用分最低的前 n 个源（监控巡检：掉队源观察）。"""
+    try:
+        metrics = _load_metrics()
+        rows = sorted(
+            ((sid, m.get("credit", C.CREDIT_INIT)) for sid, m in metrics.items()
+             if isinstance(m, dict)),
+            key=lambda x: x[1],
         )
         return rows[:n]
     except Exception:
