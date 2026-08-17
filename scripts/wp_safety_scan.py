@@ -109,89 +109,81 @@ def main():
 
     auth = _auth_header(user, app_pw)
 
-    # 1) 定位目标文章：优先 env PUBLISHED_URL（由发布步骤写入 GITHUB_ENV），
-
-    #    否则取最新一篇已发布文章（daily / roundup 工作流发布后即扫描，最新即目标）。
-
+    # 1) 解析目标文章 id（用于精确删除）—— 优先级：
+    #    a) 发布步骤直接透传的 PUBLISHED_ID（最可靠，避免 .html 永久链接反查失败）；
+    #    b) 从 PUBLISHED_URL 解析末尾数字（兼容 /13471.html 与 ?p=13471）；
+    #    c) 回退 WP REST search（按 slug 检索）；
+    #    d) 均无则取最新一篇已发布文章（存量违规清理 / 手动调用场景）。
     target_id = None
-
     target_link = os.environ.get("PUBLISHED_URL") or os.environ.get("PUBLISHED_URL_SCAN")
 
-    if target_link:
-
-        # 从 link 反查 id（用于删除）
-
+    raw_id = os.environ.get("PUBLISHED_ID")
+    if raw_id and str(raw_id).strip():
         try:
+            target_id = int(str(raw_id).strip())
+        except ValueError:
+            target_id = None
 
+    if target_id is None and target_link:
+        _seg = target_link.rstrip("/").split("?")[0]
+        _m = re.search(r"(\d+)", _seg)
+        if _m:
+            target_id = int(_m.group(1))
+
+    if target_id is None and target_link:
+        try:
+            _slug = re.sub(r"\.html?$", "", target_link.rstrip("/").split("/")[-1])
             r = requests.get(f"{wp_url}/wp-json/wp/v2/posts",
-
-                             params={"search": target_link.rstrip("/").split("/")[-1], "status": "publish", "per_page": 5},
-
+                             params={"search": _slug, "status": "publish", "per_page": 5},
                              headers=auth, timeout=30)
-
             if r.ok:
-
                 for p in r.json():
-
                     if (p.get("link") or "").rstrip("/") == target_link.rstrip("/"):
-
                         target_id = p.get("id")
-
                         break
-
         except Exception:
-
             pass
 
-    else:
-
+    if target_id is None and not target_link:
         try:
-
             r = requests.get(f"{wp_url}/wp-json/wp/v2/posts",
-
                              params={"status": "publish", "per_page": 1, "orderby": "date", "order": "desc"},
-
                              headers=auth, timeout=30)
-
             if r.ok and r.json():
-
                 p = r.json()[0]
-
                 target_id = p.get("id")
-
                 target_link = p.get("link")
-
         except Exception as e:
-
             sys.stderr.write(f"查询最新文章失败: {e}\n")
 
-    if not target_link:
-
+    if not target_link and target_id is None:
         sys.stderr.write("未定位到已发布文章，跳过扫描（不阻断）\n")
-
         sys.exit(0)
 
-
-
-        # 2) 抓取正文：优先 WP API 的 content.rendered（不含主题导航/页脚，避免误判），
-    #    失败再回退公开页 HTML。
+    # 2) 抓取正文：优先 WP API 的 content.rendered（纯文章正文，不含主题导航/页脚 chrome，
+    #    从根本上消除 tg_recruit 等主题自身链接导致的误判）；仅当 API 失败时回退公开页 HTML。
+    #    两套均无内容则跳过扫描（绝不删除），避免误删线上文章。
     txt = ""
 
-    try:
-        pr = requests.get(f"{wp_url}/wp-json/wp/v2/posts/{target_id}",
-                         params={"context": "view"}, headers=auth, timeout=30)
-        if pr.ok:
-            txt = _strip_tags((pr.json().get("content") or {}).get("rendered") or "")
-    except Exception:
-        txt = ""
+    if target_id is not None:
+        try:
+            pr = requests.get(f"{wp_url}/wp-json/wp/v2/posts/{target_id}",
+                             params={"context": "view"}, headers=auth, timeout=30)
+            if pr.ok:
+                txt = _strip_tags((pr.json().get("content") or {}).get("rendered") or "")
+        except Exception:
+            txt = ""
 
-    if not txt:
+    if not txt and target_link:
         try:
             html_text = requests.get(target_link, timeout=30).text
+            txt = _strip_tags(html_text)
         except Exception as e:
             print(f"抓取文章页失败: {e}", file=sys.stderr)
-            sys.exit(0)
-        txt = _strip_tags(html_text)
+
+    if not txt:
+        sys.stderr.write("⚠️ 无法获取文章正文（API 与公开页均失败），跳过发布后扫描（不删除任何文章）\n")
+        sys.exit(0)
 
     hits = adf.safety_hard_filter(txt)
 
@@ -199,6 +191,9 @@ def main():
 
         sys.stderr.write(f"⚠️ 发布后扫描发现违规残留: {hits}\n")
 
+        if target_id is None:
+            sys.stderr.write("⚠️ 无法定位文章 id（PUBLISHED_ID/URL 解析均失败），跳过自动删除，但标记 job 失败以告警\n")
+            sys.exit(1)
         sys.stderr.write(f"⚠️ 自动删除文章 ID={target_id}（force，不经过回收站）\n")
 
         try:
