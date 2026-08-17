@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
+import ad_filter as adf  # 硬安全闸：发布前最后一道纵深防御，任何绕过 generate_report 内部闸的内容都不触达 WP
 
 LOG = C.get_logger()
 
@@ -424,8 +425,53 @@ def _record_posted(today, post_id, link):
         LOG.warning("回写 last_posted.json 失败（不影响发布）：%s", e)
 
 
-def main():
-    C.ensure_dirs()
+def _hard_gate_clean_report(report):
+    """发布前硬安全闸（纵深防御最后一道）：对 report 所有模块的 item 与每日总结跑
+    ad_filter.safety_hard_filter / has_placeholder，命中博彩/引流/自推/占位符的 item 直接剔除；
+    daily_summary 命中则清空。保证任何绕过 generate_report 内部闸（增量累积、AI 末轮合成等）
+    的内容都不会触达 WP。返回 (report, removed_items, summary_cleared)。"""
+    removed = 0
+    mods = report.get("modules", {})
+    for key in ("project_opportunities", "growth_operations", "views_insights"):
+        items = mods.get(key, [])
+        if not items:
+            continue
+        keep = []
+        for it in items:
+            blob = " ".join(str(it.get(k) or "") for k in
+                           ("title", "signal", "perspective", "value_proposition",
+                            "how_to_mvp", "acquisition_channel", "monetization",
+                            "replicability", "summary", "content", "target_customer",
+                            "source_name", "description"))
+            if adf.safety_hard_filter(blob) or adf.has_placeholder(blob):
+                removed += 1
+                LOG.warning("【发布前硬闸】剔除违规 item(%s): %s", key, (it.get("title") or "")[:60])
+                continue
+            keep.append(it)
+        mods[key] = keep
+    cleared = False
+    ds = report.get("daily_summary") or {}
+    if isinstance(ds, dict):
+        _sum_text = " ".join(str(ds.get(k) or "") for k in ("methodology", "text", "summary", "content"))
+        if adf.safety_hard_filter(_sum_text) or adf.has_placeholder(_sum_text):
+            cleared = True
+            for _k in list(ds.keys()):
+                ds[_k] = ""
+            LOG.warning("【发布前硬闸】daily_summary 含违规内容，已清空以保合规")
+    return report, removed, cleared
+
+
+def _emit_published_url(link):
+    """打印 PUBLISHED_URL（供日志/下游读取），并在 GitHub Actions 环境写入 $GITHUB_ENV，
+    供后续发布后合规扫描步骤精确命中目标文章。"""
+    print("PUBLISHED_URL=" + link)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        try:
+            with open(os.environ.get("GITHUB_ENV", ""), "a", encoding="utf-8") as _ef:
+                if _ef:
+                    _ef.write(f"PUBLISHED_URL={link}\n")
+        except Exception:
+            pass
     # 发布开关：FUYR_DISABLE_PUBLISH=1 时仅渲染不发布（用于 CNB 等副流水线，避免双 CI 同发一个 WP 造成重复/覆盖）。
     # 让 GitHub Actions 成为唯一发布方；CNB 仅做"生成+诊断"，互不打架。
     if os.environ.get("FUYR_DISABLE_PUBLISH", "").strip() in ("1", "true", "True", "yes"):
@@ -445,6 +491,16 @@ def main():
     if not report:
         LOG.error("无日报数据，跳过发布。")
         raise SystemExit("no report data")
+    # —— 发布前硬安全闸（纵深防御最后一道）——
+    report, _rem, _clr = _hard_gate_clean_report(report)
+    if _rem or _clr:
+        try:
+            import io
+            with open(os.path.join(C.DATA_DIR, f"report-{today}.json"), "w", encoding="utf-8") as _fh:
+                json.dump(report, _fh, ensure_ascii=False, indent=2)
+            LOG.info("发布前硬闸已剔除 %d 条违规 item（summary 清空=%s），清洗后 report 已回写。", _rem, _clr)
+        except Exception as _e:
+            LOG.warning("清洗后回写 report 失败（不影响本次发布）: %s", _e)
     if report.get("ai_failed"):
         LOG.error("report 为降级/AI 失败状态，按策略不发布非 AI 内容。")
         raise SystemExit("ai failed report rejected")
@@ -486,7 +542,7 @@ def main():
         r.raise_for_status()
         link = r.json().get("link", "")
         LOG.info("已更新: %s", link)
-        print("PUBLISHED_URL=" + link)
+        _emit_published_url(link)
         _record_posted(today, existing_id, link)
         return
 
@@ -504,7 +560,7 @@ def main():
     r.raise_for_status()
     link = r.json().get("link", "")
     LOG.info("已发布: %s", link)
-    print("PUBLISHED_URL=" + link)
+    _emit_published_url(link)
     _record_posted(today, r.json().get("id"), link)
 
 
