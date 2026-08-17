@@ -98,7 +98,7 @@ def record_run(source_status):
                 # 数据中心 IP 偶发 403（非源本身失效）→ 轻度惩罚（×0.4），区别于真实抓取失败。
                 # 完全中性会掩盖"长期只返回 403 的伪活源"；轻度惩罚使其在持续 403 时缓慢降级，
                 # 又不至于因偶发抖动误判死（真实失败仍按 CREDIT_FAIL_PENALTY 全额扣分）。
-                m["credit"] = max(0, m.get("credit", C.CREDIT_INIT) - int(round(C.CREDIT_FAIL_PENALTY * 0.4)))
+                m["credit"] = max(0, m.get("credit", C.CREDIT_INIT) - max(1, int(round(C.CREDIT_FAIL_PENALTY * 0.4))))
             else:
                 m["consec_fetch_fail"] += 1
                 m["credit"] = max(0, m.get("credit", C.CREDIT_INIT) - C.CREDIT_FAIL_PENALTY)
