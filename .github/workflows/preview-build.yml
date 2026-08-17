@@ -1,0 +1,157 @@
+name: 日报/周报前端预览构建（不发布）
+
+# 用途：在真实 GitHub Actions 环境跑完整管线（采集→AI生成→周报合成），
+#       但【拦截一切线上发布】，仅把「日报前端 HTML」与「周报前端 HTML」作为产物上传，
+#       供跨轮内容质检 + 产出可浏览器直开的前端 HTML 交付物。
+# 与 zz_test_live.yml 区别：额外渲染日报 HTML（publish_wp.render）并上传 artifact。
+
+on:
+  workflow_dispatch:
+    inputs:
+      rpm:
+        description: 'Gemini RPM 滑窗上限（默认 10，留余量 < 15）'
+        required: false
+        default: '10'
+      rpd:
+        description: 'Gemini 每日免费预算上限（默认 800，留余量 < 1500）'
+        required: false
+        default: '800'
+  push:
+    paths:
+      - '.github/workflows/preview-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuyrribao-preview
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
+  AI_MODEL: gemini-flash-latest
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
+  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  AI_FALLBACK_MODEL: auto
+  GEMINI_RPM: ${{ github.event.inputs.rpm || '10' }}
+  GEMINI_RPD: ${{ github.event.inputs.rpd || '800' }}
+  GEMINI_MAX_CONCURRENCY: '1'
+  # 测试专用：降低周报门槛，让单日少量条目也能合成周报供内容质检
+  ROUNDUP_MIN_ITEMS: '1'
+  ROUNDUP_MIN_ENTRIES: '1'
+  ROUNDUP_TOP_K: '14'
+  # 阻断一切真实发布
+  FUYR_DISABLE_PUBLISH: '1'
+  WP_URL: 'http://localhost:9'
+  WP_AUTH: 'dummy-test-noop'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
+
+      - name: 注入 AI 限速器（免费 Gemini 配额保护，防 429）
+        run: python scripts/patches/apply_rate_limit.py
+
+      - name: 采集 + AI 生成日报（不发布）
+        run: |
+          python scripts/fetch_signals.py
+          python scripts/generate_report.py
+
+      - name: 渲染日报前端 HTML（publish_wp.render，落盘不发布）
+        run: |
+          python - <<'PY'
+          import os, sys, json
+          sys.path.insert(0, "scripts")
+          import common as C, publish_wp as P
+          today = C.date_str()
+          rep = C.load_json(os.path.join(C.DATA_DIR, "report-%s.json" % today), {})
+          if not rep:
+              rep = C.load_json(os.path.join(C.STATE_DIR, "daily_report_%s.json" % today), {})
+          html = P.render(rep)
+          open("daily_preview.html", "w", encoding="utf-8").write(html)
+          print("DAILY_PREVIEW bytes=%d | items=%d" % (
+              len(html),
+              sum(len((rep.get("modules") or {}).get(k, [])) for k in ("project_opportunities","growth_operations","views_insights"))))
+          PY
+
+      - name: 构建周报 store + 合成周报 HTML（拦截发布，落盘）
+        run: |
+          python - <<'PY'
+          import os, sys, json
+          sys.path.insert(0, "scripts")
+          import common as C, generate_roundup as G
+          today = C.date_str()
+          p = os.path.join(C.DATA_DIR, "report-%s.json" % today)
+          if not os.path.exists(p):
+              p = os.path.join(C.STATE_DIR, "daily_report_%s.json" % today)
+          items = []
+          if os.path.exists(p):
+              d = json.load(open(p, encoding="utf-8"))
+              for mod, lst in (d.get("modules") or {}).items():
+                  for it in (lst or []):
+                      if isinstance(it, dict):
+                          items.append({
+                              "date": today, "module": mod,
+                              "title": it.get("title", "") or "",
+                              "source_url": it.get("source_url", "") or "",
+                              "summary": it.get("signal") or it.get("summary") or "",
+                              "perspective": it.get("perspective", "") or "",
+                              "replicability": it.get("replicability", "") or "",
+                          })
+          C.ensure_dirs()
+          with open(os.path.join(C.STATE_DIR, "items_store.jsonl"), "w", encoding="utf-8") as f:
+              for e in items:
+                  f.write(json.dumps(e, ensure_ascii=False) + "\n")
+          print("BUILD_STORE wrote %d entries" % len(items))
+
+          def _fake_publish(wp_url, wp_auth, title, html, cat_name):
+              open("roundup_preview.html", "w", encoding="utf-8").write(html)
+              print("ROUNDUP_PREVIEW bytes=%d | title=%s" % (len(html), title))
+              return ("0", "file:///dev/null")
+          G._publish = _fake_publish
+          G.main()
+          PY
+
+      - name: 质量检测（硬安全闸回归：扫描预览 HTML 是否残留博彩/引流/emoji刷屏）
+        run: |
+          python - <<'PY'
+          import sys, re
+          sys.path.insert(0, "scripts")
+          import ad_filter as adf
+          txt = ""
+          for fn in ("daily_preview.html", "roundup_preview.html"):
+              try:
+                  txt += open(fn, encoding="utf-8").read()
+              except Exception:
+                  pass
+          hits = adf.safety_hard_filter(txt)
+          if hits:
+              print("⚠️ 安全闸在预览中发现残留违规:", hits)
+          else:
+              print("✅ 安全闸扫描通过：预览 HTML 无博彩/引流/自推残留")
+          PY
+
+      - name: 上传前端预览产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-previews
+          path: |
+            daily_preview.html
+            roundup_preview.html
+          if-no-files-found: warn
