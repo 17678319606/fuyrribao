@@ -166,6 +166,10 @@ jobs:
             fi
           done
 
+      - name: 发布后合规扫描（命中博彩/引流即自动删帖并告警）
+        if: success()
+        run: python scripts/wp_safety_scan.py
+
       # 公众号推送已移交 WordPress 插件（fuyr-wechat-pusher）在源站直接调用微信 API 处理，
       # 利用服务器已在白名单的出口 IP，无需 CI 侧代理。故此处不再调用 publish_wechat.py，
       # 避免与插件双重推送。CNB 侧通过 run_daily.py 的 WX_PUSH_VIA_WP 网关同样跳过 wechat 步骤。
