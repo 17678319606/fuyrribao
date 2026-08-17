@@ -149,60 +149,6 @@
     "name": "Hacker News Show"
   },
   {
-    "id": "reddit_sideproject",
-    "type": "reddit_json",
-    "url": "https://www.reddit.com/r/SideProject/hot.json?limit=25",
-    "name": "Reddit r/SideProject",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "独立开发者项目展示社区，高相关"
-  },
-  {
-    "id": "reddit_indiehackers",
-    "type": "reddit_json",
-    "url": "https://www.reddit.com/r/indiehackers/hot.json?limit=25",
-    "name": "Reddit r/indiehackers",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "indie hacker 社区"
-  },
-  {
-    "id": "reddit_entrepreneur",
-    "type": "reddit_json",
-    "url": "https://www.reddit.com/r/Entrepreneur/hot.json?limit=25",
-    "name": "Reddit r/Entrepreneur",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "创业/副业讨论社区"
-  },
-  {
-    "id": "reddit_artificial",
-    "type": "reddit_json",
-    "url": "https://www.reddit.com/r/artificial/hot.json?limit=25",
-    "name": "Reddit r/artificial",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "AI 资讯社区，高相关"
-  },
-  {
-    "id": "reddit_localllama",
-    "type": "reddit_json",
-    "url": "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=25",
-    "name": "Reddit r/LocalLLaMA",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "LLM/AI 工具实践"
-  },
-  {
-    "id": "reddit_selfhosted",
-    "type": "reddit_json",
-    "url": "https://www.reddit.com/r/selfhosted/hot.json?limit=25",
-    "name": "Reddit r/selfhosted",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "自托管/技术副业"
-  },
-  {
     "id": "smashing",
     "type": "rss",
     "url": "https://www.smashingmagazine.com/feed/",
@@ -219,15 +165,6 @@
     "added_by": "curated",
     "added_date": "2026-08-16",
     "rationale": "HN 最高赞长文，质量天花板"
-  },
-  {
-    "id": "theresanaiforthat",
-    "type": "rss",
-    "url": "https://theresanaiforthat.com/feed/",
-    "name": "There's An AI For That",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "AI 工具聚合，强相关"
   },
   {
     "id": "lennys",
@@ -284,21 +221,48 @@
     "rationale": "被动收入/副业经典 newsletter"
   },
   {
-    "id": "opml_energynews_africa_8906a61d75",
+    "id": "techcrunch_ai",
     "type": "rss",
-    "url": "https://energynews.africa/feed/",
-    "name": "energynews.africa",
-    "added_by": "opml-import",
+    "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+    "name": "TechCrunch AI",
+    "added_by": "curated-replace",
     "added_date": "2026-08-17",
-    "score": 21
+    "rationale": "AI 头部媒体，替换 theresanaiforthat/reddit 的 AI 资讯深度"
   },
   {
-    "id": "opml_www_lesinrocks_com_6e8debfab2",
+    "id": "theverge_ai",
     "type": "rss",
-    "url": "http://www.lesinrocks.com/musique/feed/",
-    "name": "www.lesinrocks.com",
-    "added_by": "opml-import",
+    "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+    "name": "The Verge AI",
+    "added_by": "curated-replace",
     "added_date": "2026-08-17",
-    "score": 21
+    "rationale": "AI 产品/行业动态，高质量英文源"
+  },
+  {
+    "id": "marktechpost",
+    "type": "rss",
+    "url": "https://www.marktechpost.com/feed/",
+    "name": "MarkTechPost",
+    "added_by": "curated-replace",
+    "added_date": "2026-08-17",
+    "rationale": "AI/ML 研究与应用实战，强技术相关"
+  },
+  {
+    "id": "simonwillison",
+    "type": "rss",
+    "url": "https://simonwillison.net/atom/everything/",
+    "name": "Simon Willison",
+    "added_by": "curated-replace",
+    "added_date": "2026-08-17",
+    "rationale": "AI/LLM 工程实践一手洞察，独立开发者视角"
+  },
+  {
+    "id": "pragmaticengineer",
+    "type": "rss",
+    "url": "https://newsletter.pragmaticengineer.com/feed",
+    "name": "The Pragmatic Engineer",
+    "added_by": "curated-replace",
+    "added_date": "2026-08-17",
+    "rationale": "工程职业/行业趋势，补 reddit 的职场副业讨论"
   }
 ]
