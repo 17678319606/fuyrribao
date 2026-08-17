@@ -94,6 +94,10 @@ def record_run(source_status):
                 m["fresh_total"] += fresh
                 if fresh > 0:
                     m["last_fresh_date"] = today
+            elif st.get("reason") == "http_403":
+                # 数据中心 IP 偶发 403（非源本身失效）→ 中性处理：不计失败、不扣信用，
+                # 避免误把正常源判死（见 fetch_signals 的 403 抖动豁免）。
+                pass
             else:
                 m["consec_fetch_fail"] += 1
                 m["credit"] = max(0, m.get("credit", C.CREDIT_INIT) - C.CREDIT_FAIL_PENALTY)
@@ -103,6 +107,34 @@ def record_run(source_status):
         _save_metrics(metrics)
     except Exception as e:
         LOG.warning("源指标记录失败（不影响主流程）: %s", e)
+
+
+def is_fused(sid):
+    """信用熔断：credit ≤ CREDIT_RETIRE 的源直接跳过抓取（自动熔断，防空耗与误告警）。
+
+    源信用注册表（source_credit.json）为主、手动 retired 为辅，统一在此裁决是否抓取。
+    """
+    try:
+        m = _load_metrics().get(sid)
+        if not m:
+            return False
+        return (m.get("credit", C.CREDIT_INIT) <= C.CREDIT_RETIRE)
+    except Exception:
+        return False
+
+
+def top_credits(n=5):
+    """返回信用分最高的前 n 个源（监控巡检用）。"""
+    try:
+        metrics = _load_metrics()
+        rows = sorted(
+            ((sid, m.get("credit", C.CREDIT_INIT)) for sid, m in metrics.items()
+             if isinstance(m, dict)),
+            key=lambda x: x[1], reverse=True,
+        )
+        return rows[:n]
+    except Exception:
+        return []
 
 
 def record_contributions(report, sources=None):
