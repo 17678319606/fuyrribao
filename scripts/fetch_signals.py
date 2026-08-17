@@ -310,7 +310,44 @@ PARSERS = {
     "reddit_json": parse_reddit_json,
     "github_readme_diff": parse_github_readme_diff,
     "github_trending": parse_github_trending,
+    "repo_base": parse_repo_base,
 }
+
+
+def parse_repo_base(cfg):
+    """仓库基础内容源：从 repo 内 data/base_content.json 读取 curated 基础条目。
+    不依赖外部网络，零抓取失败风险；标记 pinned+fixed 后豁免信用排名。
+    JSON 格式：[{title, summary, content, library, quote_original, source_url}, ...]
+    """
+    name = cfg.get("name", "repo_base")
+    path = cfg.get("path", "data/base_content.json")
+    out = []
+    try:
+        if os.path.isfile(path):
+            items = C.load_json(path, [])
+        else:
+            LOG.warning("repo_base 文件不存在: %s（跳过，视为空源）", path)
+            return []
+    except Exception as e:
+        LOG.warning("repo_base 读取失败 %s: %s", name, e)
+        raise
+    for item in items:
+        if not isinstance(item, dict) or not item.get("title"):
+            continue
+        out.append({
+            "source_id": cfg.get("id", "repo_base"),
+            "source_name": name,
+            "source_url": item.get("source_url", f"repo://{cfg.get('id','')}"),
+            "title": _clean_text(item.get("title", "")),
+            "summary": _clean_text(item.get("summary", "")),
+            "content": _clean_html(item.get("content", item.get("summary", ""))),
+            "published_at": item.get("published_at") or _now_iso(),
+            # 打上库标签，供 generate_report.py 三库分类使用
+            "library": item.get("library", ""),
+            "quote_original": item.get("quote_original", ""),
+        })
+    LOG.info("repo_base %s: 读取 %d 条 → 输出 %d 条", name, len(items), len(out))
+    return out
 
 
 # ───────────────────────── 广告 / 博彩 / 引流黑名单（零 LLM 预筛） ─────────────────────────
