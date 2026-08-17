@@ -924,13 +924,16 @@ def _hard_gate_clean_report(report):
 
 
 
-def _emit_published_url(link):
+def _emit_published_url(link, post_id=None):
 
     """打印 PUBLISHED_URL（供日志/下游读取），并在 GitHub Actions 环境写入 $GITHUB_ENV，
 
     供后续发布后合规扫描步骤精确命中目标文章。"""
 
     print("PUBLISHED_URL=" + link)
+
+    if post_id is not None:
+        print("PUBLISHED_ID=" + str(post_id))
 
     if os.environ.get("GITHUB_ACTIONS") == "true":
 
@@ -941,6 +944,8 @@ def _emit_published_url(link):
                 if _ef:
 
                     print(f"PUBLISHED_URL={link}", file=_ef)
+                    if post_id is not None:
+                        print(f"PUBLISHED_ID={post_id}", file=_ef)
                     print("FUYR_PUBLISHED=1", file=_ef)
 
         except Exception:
@@ -1110,7 +1115,7 @@ def main():
 
         LOG.info("已更新: %s", link)
 
-        _emit_published_url(link)
+        _emit_published_url(link, existing_id)
 
         _record_posted(today, existing_id, link)
 
@@ -1146,7 +1151,7 @@ def main():
 
     LOG.info("已发布: %s", link)
 
-    _emit_published_url(link)
+    _emit_published_url(link, r.json().get("id"))
 
     _record_posted(today, r.json().get("id"), link)
 
