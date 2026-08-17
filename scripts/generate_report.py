@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """步骤2：读取当日去重信号，调用 AI 生成结构化日报 JSON。
 
-高延迟优化（v3.0 / v4.2 Gemini 首选 / v4.3 原生 Gemini）：
+高延迟优化（v4.4 jinbufenzi 唯一 AI）：
 - 移除降级兜底：AI 不可用则直接失败， workflow 随之失败，不会发布非 AI 内容。
-- AI 后端首选 Google Gemini（原生 API）：海外 Runner 直连 Google 全球边缘，
-  规避「海外 Runner → 国内网关」跨境瓶颈（根因）。
-  自动兼容 AI Studio 新版 AQ. Auth key（不支持 OpenAI 兼容端点，只能用原生 Gemini API）。
-- 可选 AI_BASE_URL_POOL 镜像 + AI_FALLBACK_URL（国内网关，OpenAI 兼容）兜底。
-  每个端点含独立 (url, key, model)，并根据 host 自动选择原生 Gemini 或 OpenAI 兼容协议。
+- 唯一 AI 后端：jinbufenzi 国内网关（OpenAI 兼容，Bearer key 鉴权）。不再接入 Google Gemini。
+  取消 Gemini 原生路径，避免「海外 Runner → Google」跨境瓶颈与免费层限流/拥堵导致的长时间挂起。
+- 可选 AI_BASE_URL_POOL 镜像做多端点轮换；默认即 jinbufenzi。
+  每个端点含独立 (url, key, model)，统一走 OpenAI 兼容 /chat/completions 协议。
 - 允许 AI_FORCE_NON_STREAM（强制非流式）、AI_REQUEST_TIMEOUT（覆盖读超时）以适配慢链路。
 - 保留 DNS-over-HTTPS 兜底与代理池，用于海外 Runner 偶发解析抖动（仅国内网关等易抖动 host）。
 """
@@ -439,166 +438,13 @@ def _install_dns_patch(host):
     LOG.info("DoH 兜底：%s 固定解析到 %s（后续直连不再依赖 Runner 本地 DNS）", host, target)
 
 
-def _is_gemini_native(base_url):
-    """判断端点是否为 Google Gemini 原生 API（非 OpenAI 兼容层）。
-
-    AI Studio 新版 AQ. Auth key 不支持 OpenAI 兼容端点，只能用原生 Gemini API：
-    https://generativelanguage.googleapis.com/v1beta/...
-    若 URL 包含 /openai/ 则视为 OpenAI 兼容层（旧 AIza key 才走这里）。
-    """
-    if not base_url:
-        return False
-    low = base_url.lower()
-    return "generativelanguage.googleapis.com" in low and "/openai/" not in low
-
-
-def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, stream=True):
-    """调用 Google Gemini 原生 API（适配 AI Studio AQ. Auth key）。
-
-    - 端点示例：https://generativelanguage.googleapis.com/v1beta
-    - 鉴权：URL 查询参数 ?key=API_KEY（AQ. Auth key 的标准用法）
-    - 非流式：models/{model}:generateContent
-    - 流式：models/{model}:streamGenerateContent（返回 JSON Lines）
-    返回模型原始 content 字符串。
-    """
-    start = time.time()
-
-    # 统一限速器：免费层 RPM 滑窗 + 每日预算，避免密集调用撞 429 / 打光配额。
-    # 估算本次 token 吞吐（输入字符/2 + 最大输出），供 TPM 闸门限速
-    try:
-        _est = ((len(system_prompt or "") + len(user_prompt or "")) // 2) + MAX_OUTPUT_TOKENS
-    except Exception:
-        _est = MAX_OUTPUT_TOKENS
-    C.ai_limiter._last_est_tokens = _est
-    C.ai_limiter.throttle(is_gemini=True)
-
-    base_url = base_url.rstrip("/")
-    model_id = model.split("/")[-1] if "/" in model else model
-    action = "streamGenerateContent" if stream else "generateContent"
-    url = f"{base_url}/models/{model_id}:{action}?key={api_key}"
-
-    # Gemini 原生 API 把 system prompt 拼进 user contents 前面
-    full_prompt = f"{system_prompt}\n\n{user_prompt}".strip()
-    payload = {
-        "contents": [
-            {"role": "user", "parts": [{"text": full_prompt}]}
-        ],
-        "generationConfig": {
-            "temperature": 0.5,
-            "maxOutputTokens": MAX_OUTPUT_TOKENS,
-        },
-    }
-    headers = {"Content-Type": "application/json"}
-    timeout = _req_timeout()
-    mode = "stream" if stream else "non-stream"
-
-def _exp_jitter(base, attempt):
-    """指数退避 + 随机抖动：避免固定节奏撞墙，也避免退避过短。"""
-    return min(60.0, base * (2 ** (attempt - 1))) + random.uniform(0, base)
-
-    # 免费层 Gemini 常见瞬时错误：503/502/504（Google 侧过载）、429（免费层限流）、空流。
-    # 这些不是鉴权/配额硬失败，给 3 次指数退避重试，命中即省下兜底网关、提升主通道占比。
-    GEMINI_TRANSIENT = (429, 500, 502, 503, 504)
-    max_attempts = 3
-    base_delay = 2.0
-    last_err = None
-    for attempt in range(1, max_attempts + 1):
-        LOG.info("Gemini 原生请求 [base=%s, model=%s] (%s) 第 %d/%d 次",
-                 base_url, model_id, mode, attempt, max_attempts)
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=stream)
-            code = resp.status_code
-            # 流式响应里 5xx 可能以非异常形式返回，这里先判状态码
-            if code in GEMINI_TRANSIENT:
-                last_err = RuntimeError(f"Gemini 原生瞬时服务端错误 {code}")
-                wait = _exp_jitter(base_delay, attempt)
-                LOG.warning("Gemini 原生返回 %d（瞬时），%.1fs 后重试 (%d/%d)", code, wait, attempt, max_attempts)
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            code = e.response.status_code if e.response is not None else 0
-            body = ""
-            try:
-                body = (e.response.text or "")[:400]
-            except Exception:
-                pass
-            # AI Studio 新版 AQ. key 常见硬失败：预付费额度耗尽（非限流，充值/绑卡前无解）
-            if code == 429 and any(k in body.lower() for k in ("prepayment", "credits", "depleted")):
-                LOG.error("Gemini 原生调用被拒：预付费额度已耗尽（prepayment credits depleted），将退回兜底网关。"
-                          "请在 Google AI Studio 项目 94038486169 充值或绑定计费账户后自动恢复。")
-                raise
-            if code in GEMINI_TRANSIENT:
-                last_err = e
-                wait = _exp_jitter(base_delay, attempt)
-                LOG.warning("Gemini 原生 HTTP %d（瞬时），%.1fs 后重试 (%d/%d)", code, wait, attempt, max_attempts)
-                time.sleep(wait)
-                continue
-            raise
-
-        if not stream:
-            data = resp.json()
-            text = ""
-            for cand in data.get("candidates", []):
-                for part in cand.get("content", {}).get("parts", []):
-                    text += part.get("text", "")
-            LOG.info("Gemini 原生请求成功（模式=non-stream，耗时 %.1fs，约 %d 字）",
-                     time.time() - start, len(text))
-            return text
-
-        # 流式：JSON Lines，每行一个完整 JSON chunk
-        content = ""
-        stream_deadline = time.time() + STREAM_MAX_SECONDS
-        last_progress = time.time()
-        for raw_line in resp.iter_lines(decode_unicode=False):
-            if time.time() > stream_deadline:
-                LOG.warning("Gemini 流式读取整体超时（>%ds），强制中断", STREAM_MAX_SECONDS)
-                break
-            if not raw_line:
-                continue
-            try:
-                line = raw_line.decode("utf-8").strip()
-            except Exception:
-                line = raw_line.decode("utf-8", "replace").strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for cand in obj.get("candidates", []):
-                for part in cand.get("content", {}).get("parts", []):
-                    delta = part.get("text", "")
-                    if delta:
-                        content += delta
-            if (time.time() - last_progress > 60 or
-                    (len(content) > 0 and len(content) % 500 < 50)):
-                LOG.info("Gemini 流式读取中：已收 %d 字，耗时 %.1fs", len(content), time.time() - start)
-                last_progress = time.time()
-
-        if not content:
-            # 空流多为瞬时（连接抖动 / Google 过载），按瞬重试；用尽后再降级兜底
-            last_err = RuntimeError("Gemini 原生流式响应为空")
-            wait = _exp_jitter(base_delay, attempt)
-            LOG.warning("Gemini 原生流式响应为空（瞬时?），%.1fs 后重试 (%d/%d)", wait, attempt, max_attempts)
-            time.sleep(wait)
-            continue
-        LOG.info("Gemini 原生请求成功（模式=stream，耗时 %.1fs，约 %d 字）",
-                 time.time() - start, len(content))
-        return content
-
-    # 重试耗尽：抛出让上层 _call_ai 降级到兜底网关（兜底逻辑不变）
-    raise last_err or RuntimeError("Gemini 原生调用失败（瞬时重试耗尽）")
-
-
 def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True):
     """调用 AI，支持多 (url,key,model) 端点 fallback + 端点轮换 + 重试。
     返回模型原始 content 字符串。
 
     - base_urls 可为字符串或列表（首选，共用传入的 api_key/model）；
       另含可选 AI_FALLBACK_URL/KEY/MODEL 兜底端点（默认国内网关，独立 key/model）。
-    - 首选即 Google Gemini 原生 API：海外 Runner 直连，规避跨境瓶颈；
-      自动适配 AI Studio 新版 AQ. Auth key（不支持 OpenAI 兼容端点）。
+    - 唯一 AI 后端：jinbufenzi 国内网关（OpenAI 兼容），Bearer key 鉴权，统一 /chat/completions。
     - AI_FORCE_NON_STREAM=1 时强制全部调用走非流式。
     - AI_REQUEST_TIMEOUT 可覆盖默认读超时。
     - 流式读取自带 STREAM_MAX_SECONDS 整体 wall-clock 上限，避免端点极慢吐数据或
@@ -620,15 +466,12 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
 
     # 展开为 (url, key, model) 端点列表：首选 base_urls（共用 api_key/model）
     # + 可选兜底（AI_FALLBACK_URL/KEY/MODEL，默认国内网关，独立 key/model）。
-    # 端点装配：默认首选传入的 base_urls（Gemini 等），可选 AI_FALLBACK_URL 作兜底。
+    # 端点装配：base_urls（默认 jinbufenzi 网关，或用户显式 OpenAI 兼容网关）。
     # 低摩擦增强：若检测到 DEEPSEEK_API_KEY，则把 DeepSeek（OpenAI 兼容、国内稳定、
-    # 用户长期偏好）作为【首选】，原 base_urls 降级为兜底——避免在已限流(429)的 Gemini
-    # 上反复重试浪费时间。只需在密钥仓库 env.yml 加一行 DEEPSEEK_API_KEY=<你的key> 即生效。
+    # 用户长期偏好）作为【首选】，原 base_urls 降级为兜底。只需在密钥仓库加一行
+    # DEEPSEEK_API_KEY=<你的key> 即生效（与 jinbufenzi 并存，互不影响）。
     endpoints = []
     seen = set()
-    fb_url = os.environ.get("AI_FALLBACK_URL", "").strip().rstrip("/")
-    fb_key = os.environ.get("AI_FALLBACK_KEY", "").strip()
-    fb_model = os.environ.get("AI_FALLBACK_MODEL", "").strip() or model
     ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     ds_model = os.environ.get("DEEPSEEK_MODEL", "").strip() or "deepseek-chat"
     # 仅当用户未显式指定 base_url（依赖默认网关）时才把 DeepSeek 自动插为首选，
@@ -642,24 +485,12 @@ def _call_ai(base_urls, api_key, model, system_prompt, user_prompt, stream=True)
         if u and u not in seen:
             seen.add(u)
             endpoints.append((u, api_key, model))
-    if fb_url and fb_url not in seen:
-        endpoints.append((fb_url, fb_key, fb_model))
     if ds_preferred and "https://api.deepseek.com/v1" not in seen:
         # DeepSeek 插到最前作为首选；原有端点整体退为兜底。
         endpoints.insert(0, ("https://api.deepseek.com/v1", ds_key, ds_model))
         LOG.info("检测到 DEEPSEEK_API_KEY，已将 DeepSeek 设为首选端点，原 base_urls 降级为兜底")
 
     for (base_url, api_key, model) in endpoints:
-        # Gemini 原生 API（适配 AI Studio AQ. Auth key）：直接调用，不走 OpenAI 兼容层/代理池
-        if _is_gemini_native(base_url):
-            try:
-                return _call_gemini_native(base_url, api_key, model,
-                                           system_prompt, user_prompt, stream)
-            except Exception as e:
-                LOG.warning("Gemini 原生调用失败（base=%s）：%s", base_url, e)
-                last_err = e
-                continue
-
         url = base_url.rstrip("/") + "/chat/completions"
         # 解析目标 host：仅国内网关等易抖动 host 才用 DoH 兜底钉 IP；
         # googleapis.com 等全球可达域名走正常 DNS 更稳。
@@ -2058,33 +1889,16 @@ def main():
     LOG.info("本波是否末波(is_final)=%s", is_final)
 
     # AI 配置与候选端点
-    # 兼容多套命名：GEMINI_API_KEY/AI_API_KEY/ai_api_key（历史+原项目小写约定）；
-    # AI_SIDEHUSTLE_API_KEY / AI_FALLBACK_KEY（兜底）。模型同理 AI_MODEL/ai_model。
+    # 唯一 AI：jinbufenzi 国内网关（OpenAI 兼容）。主 key 取 AI_API_KEY/ai_api_key，
+    # 回落 AI_SIDEHUSTLE_API_KEY（jinbufenzi 网关专用 key）。不再接入 Gemini。
     base_urls = _parse_base_urls()
     _first_base = (base_urls[0] if base_urls else "")
-    # 主用 key 必须与网关配对，绝不能拿 A 家 key 打 B 家网关（否则 401/鉴权失败）：
-    # - 显式设置了网关(ai_base_url/AI_BASE_URL) → 优先用与其配对的主 key(AI_API_KEY/ai_api_key)，
-    #   仅当显式网关确为 Gemini 时才回落 GEMINI_API_KEY；
-    # - 否则默认走璇玑国内网关 → 用璇玑兼容 key(AI_API_KEY/ai_api_key/AI_SIDEHUSTLE_API_KEY)，
-    #   GEMINI_API_KEY 不参与（它打璇玑必失败）。
-    _explicit_base = bool(os.environ.get("ai_base_url", "").strip()
-                          or os.environ.get("AI_BASE_URL", "").strip())
-    if _explicit_base:
-        api_key = (os.environ.get("AI_API_KEY", "").strip()
-                   or os.environ.get("ai_api_key", "").strip())
-        if not api_key and "generativelanguage" in _first_base:
-            api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    else:
-        api_key = (os.environ.get("AI_API_KEY", "").strip()
-                   or os.environ.get("ai_api_key", "").strip()
-                   or os.environ.get("AI_SIDEHUSTLE_API_KEY", "").strip())
-    # 兜底端点 key（仅当 AI_FALLBACK_URL 存在时才会被组装成端点）
-    fallback_key = (os.environ.get("AI_SIDEHUSTLE_API_KEY", "").strip()
-                    or os.environ.get("AI_FALLBACK_KEY", "").strip()
-                    or os.environ.get("ai_api_key", "").strip())
-    # 模型默认值随网关自适应：国内网关 ai.jinbufenzi.com 默认 auto（网关自动选模型）；
-    # 海外 Gemini 默认 gemini-flash-latest。用户可用 AI_MODEL/ai_model 显式覆盖。
-    _default_model = "gemini-flash-latest"
+    api_key = (os.environ.get("AI_API_KEY", "").strip()
+               or os.environ.get("ai_api_key", "").strip()
+               or os.environ.get("AI_SIDEHUSTLE_API_KEY", "").strip())
+    # 唯一 AI 为 jinbufenzi 国内网关，默认模型 auto（网关自动选最优模型）。
+    # 用户可用 AI_MODEL/ai_model 显式覆盖。
+    _default_model = "auto"
     if "jinbufenzi" in _first_base:
         _default_model = "auto"
     model = (os.environ.get("AI_MODEL", "").strip() or os.environ.get("ai_model", "").strip()
@@ -2155,8 +1969,8 @@ def main():
         LOG.info("无新增信号，但检测到渲染器版本更新，仅用已累积 %d 条内容重渲染。", acc_total)
         report = accumulated
     else:
-        if not api_key and not fallback_key:
-            LOG.error("缺少任何 AI key（未配置 GEMINI_API_KEY/AI_API_KEY/ai_api_key 或 AI_SIDEHUSTLE_API_KEY/AI_FALLBACK_KEY），无法生成。")
+        if not api_key:
+            LOG.error("缺少 AI key（未配置 AI_API_KEY/ai_api_key 或 AI_SIDEHUSTLE_API_KEY）。jinbufenzi 为唯一 AI。")
             raise SystemExit("missing AI key")
 
         # 候选编排（仅对新信号）：候选过多 → 分批筛选；中小批量 → 均衡采样；最后统一上限。
