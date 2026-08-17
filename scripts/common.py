@@ -1,3 +1,4 @@
+import random
 """副业日报 · 公共常量与工具（被三个脚本共用）"""
 import os
 import re
@@ -337,11 +338,14 @@ def is_gemini_host(url):
 class AIRateLimiter:
     def __init__(self):
         self.rpm = float(os.environ.get("GEMINI_RPM", "10"))      # 滑窗上限，留 33% 余量(<15)
+        self.tpm = float(os.environ.get("GEMINI_TPM", "150000"))   # 每分钟 token 吞吐预算（保守低于免费层隐形墙）
+        self.jitter = float(os.environ.get("GEMINI_JITTER", "2.5")) # 随机间隔抖动上限(s)，避免请求同步成突发
         self.rpd = float(os.environ.get("GEMINI_RPD", "800"))     # 每日预算，留余量(<1500)
         self.max_concurrency = int(os.environ.get("GEMINI_MAX_CONCURRENCY", "1"))
         self._lock = threading.Lock()
         self._sem = threading.Semaphore(self.max_concurrency)
         self._window = []
+        self._tpm_window = []
         self._day = None
         self._used = 0
         self._loaded = False
@@ -376,6 +380,8 @@ class AIRateLimiter:
 
     def _admit_rpm(self):
         min_gap = 60.0 / max(1.0, self.rpm)
+        # 随机抖动：在固定间隔上叠加 0~jitter 的随机量，避免多调用同步成周期性突发撞墙
+        min_gap = min_gap + random.uniform(0, self.jitter)
         now = time.time()
         with self._lock:
             self._window = [t for t in self._window if now - t < 60.0]
@@ -386,6 +392,27 @@ class AIRateLimiter:
                     return need - elapsed + 0.2
         return 0.0
 
+    def _admit_tpm(self, est_tokens):
+        """TPM 闸门：滚动 60s 窗口内累计估算 token 不超过预算；超限则睡眠把余量推入下一分钟。
+        est_tokens = 输入字符数/2 + 单次最大输出 token（保守上限）。"""
+        if est_tokens <= 0:
+            return 0.0
+        now = time.time()
+        with self._lock:
+            self._tpm_window = [(t, n) for (t, n) in self._tpm_window if now - t < 60.0]
+            used = sum(n for _, n in self._tpm_window)
+            if used + est_tokens > self.tpm:
+                # 需要等多少秒让足够老的 token 滚出窗口
+                deficit = (used + est_tokens) - self.tpm
+                oldest = self._tpm_window[0][0] if self._tpm_window else now
+                wait = max(0.0, (oldest + 60.0) - now) + 0.5
+                return wait
+        return 0.0
+
+    def _record_tpm(self, est_tokens):
+        with self._lock:
+            self._tpm_window.append((time.time(), est_tokens))
+
     def throttle(self, is_gemini=True):
         with self._sem:
             self._rollover_day()
@@ -395,13 +422,19 @@ class AIRateLimiter:
                         "Gemini 免费层每日预算已用尽（%d/%d），中止本次原生调用避免撞墙；"
                         "请明日再跑或升级付费层。" % (int(self._used), int(self.rpd)))
                 wait = self._admit_rpm()
+                # TPM 闸门：按本次估算 token 吞吐限速，避免免费层「频率密度」撞墙
+                est = (getattr(self, "_last_est_tokens", 0) or 0)
+                twait = self._admit_tpm(est)
+                if twait > wait:
+                    wait = twait
                 if wait > 0:
                     logging.getLogger("fuyr.ai_limiter").warning(
-                        "AI 限速（RPM 滑窗）：补眠 %.1fs 以避免撞 Gemini 15 RPM 墙", wait)
+                        "AI 限速（RPM/TPM 闸门）：补眠 %.1fs 以避免撞 Gemini 限流墙", wait)
                     time.sleep(wait)
                 with self._lock:
                     self._window.append(time.time())
                     self._used += 1
+                    self._record_tpm(getattr(self, "_last_est_tokens", 0) or 0)
                     self._save()
             else:
                 # 非 Gemini 端点（如 OpenAI 兼容的璇玑网关）：仍做 RPM 滑窗限速，
