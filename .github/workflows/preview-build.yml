@@ -29,15 +29,10 @@ concurrency:
 
 env:
   TZ: Asia/Shanghai
-  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
-  AI_MODEL: gemini-flash-latest
-  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-  AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
-  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
-  AI_FALLBACK_MODEL: auto
-  GEMINI_RPM: ${{ github.event.inputs.rpm || '10' }}
-  GEMINI_RPD: ${{ github.event.inputs.rpd || '800' }}
-  GEMINI_MAX_CONCURRENCY: '1'
+  # —— AI 后端：唯一使用 jinbufenzi 国内网关（OpenAI 兼容），AI_SIDEHUSTLE_API_KEY 鉴权 ——
+  AI_BASE_URL: "https://ai.jinbufenzi.com/v1"
+  AI_MODEL: "auto"
+  AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
   # 测试专用：降低周报门槛，让单日少量条目也能合成周报供内容质检
   ROUNDUP_MIN_ITEMS: '1'
   ROUNDUP_MIN_ENTRIES: '1'
@@ -65,7 +60,7 @@ jobs:
       - name: 安装依赖
         run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
 
-      - name: 注入 AI 限速器（免费 Gemini 配额保护，防 429）
+      - name: 注入 AI 限速器（jinbufenzi 网关保护）
         run: python scripts/patches/apply_rate_limit.py
 
       - name: 采集 + AI 生成日报（不发布）
