@@ -60,6 +60,23 @@ def scrub_extreme(text):
         return text
     return _EXTREME.sub(lambda m: EXTREME_MAP.get(m.group(0), ""), text)
 
+
+# —— 超短极限/促销套路观测（去套路化用，仅可观测，不直接硬删）——
+_LIMIT_WORDS = 20  # 超短阈值（字符数）
+
+
+def is_limit_word(text, limit=_LIMIT_WORDS):
+    """去套路化观测：超短文本（≤ limit 字符）且含高密极限/促销/引流信号 → 标记套路化嫌疑。
+
+    仅作可观测统计（供巡检指标与前端去套路化呈现），**不直接硬删**——
+    硬删由 safety_hard_filter 命中真实违规类别（博彩/引流/自推）触发。
+    """
+    if not text or not isinstance(text, str):
+        return False
+    if len(text) > limit:
+        return False
+    return bool(_EXTREME.search(text)) or bool(_PROMO_CONTACT.search(text)) or bool(_RECRUIT.search(text))
+
 _SAFETY_GROUPS = {
     "gambling": _GAMBLING,
     "promo_contact": _PROMO_CONTACT,
