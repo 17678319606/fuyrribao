@@ -178,6 +178,16 @@ def _value_score(s):
     return round(score, 1)
 
 
+# 预筛处置计数器（单次运行内累计，供 _emit_quality_metrics 输出监控指标）
+PREFILTER_STATS = {
+    "ad_drop": 0,        # 安全闸硬删（博彩/引流/自推/emoji）
+    "extreme_scrub": 0,  # 极限词清洗（不硬删）
+    "limit_word": 0,     # 超短极限/促销套路标记
+    "substance_drop": 0, # 实质门禁丢弃（新闻复述/虚假实测）
+    "minlen_drop": 0,    # 极短丢桩
+}
+
+
 def _prefilter_signals(signals):
     """送 AI 前的免费预筛（零 LLM 调用，不破免费额度）：去重 + 丢桩。
 
@@ -189,22 +199,31 @@ def _prefilter_signals(signals):
     """
     seen, out = set(), []
     seen_titles = set()  # 归一化标题去重（防跨源重复）
+    PREFILTER_STATS.update({"ad_drop": 0, "extreme_scrub": 0, "limit_word": 0,
+                            "substance_drop": 0, "minlen_drop": 0})
     for s in signals:
         # —— 硬安全闸（预筛·无条件优先于 exempt）——
         _raw = ((s.get("title") or "") + " " + (s.get("content") or ""))
         if adf.safety_hard_filter(_raw):
             LOG.info("【安全闸·预筛】丢弃违规内容(博彩/引流/自推/emoji): %s", (s.get("title") or "")[:50])
+            PREFILTER_STATS["ad_drop"] += 1
             continue
         if adf.is_promo((s.get("title") or "")):
             LOG.info("【安全闸·预筛】丢弃自推/推广标题: %s", (s.get("title") or "")[:50])
+            PREFILTER_STATS["ad_drop"] += 1
             continue
         if adf.is_emoji_spam(s.get("title") or ""):
             LOG.info("【安全闸·预筛】丢弃emoji刷屏标题")
+            PREFILTER_STATS["ad_drop"] += 1
             continue
         # 发布前输入清洗：极限词直接抹除（不丢整条），避免 AI 读到/回写违规绝对化表达
         if adf.has_extreme((s.get("title") or "") + " " + (s.get("content") or "")):
             s["title"] = adf.scrub_extreme(s.get("title") or "")
             s["content"] = adf.scrub_extreme(s.get("content") or "")
+            PREFILTER_STATS["extreme_scrub"] += 1
+        # 去套路化观测：超短极限/促销套路标记（仅统计，不硬删）
+        if adf.is_limit_word((s.get("title") or "")):
+            PREFILTER_STATS["limit_word"] += 1
         k = C.item_dedup_key(s)
         if k:
             if k in seen:
@@ -220,6 +239,7 @@ def _prefilter_signals(signals):
         if len(text) < C.PREFILTER_MIN_LEN and not any(
             kw.lower() in text.lower() for kw in C.SOURCE_RELEVANCE_KEYWORDS
         ):
+            PREFILTER_STATS["minlen_drop"] += 1
             continue
         out.append(s)
     # 实质含量门禁（AI 前，零成本）：拦掉最 unambiguous 的废经验——纯新闻复述 + 标题吹实测但无数字。
@@ -233,6 +253,7 @@ def _prefilter_signals(signals):
                               or any("实测" in x for x in r["reasons"])):
                 LOG.info("【实质门禁·预筛】丢弃新闻复述/虚假实测信号: %s | %s",
                           (s.get("title") or "")[:50], r["reasons"])
+                PREFILTER_STATS["substance_drop"] += 1
                 continue
         except Exception:
             pass
@@ -1947,6 +1968,7 @@ def _emit_quality_metrics(report, n_prefilter_in, n_prefilter_out):
         "generated_at": datetime.datetime.now().isoformat(),
         "prefilter": {"in": n_prefilter_in, "out": n_prefilter_out,
                       "dropped": max(0, n_prefilter_in - n_prefilter_out)},
+        "prefilter_breakdown": dict(PREFILTER_STATS),
         "report_items": total_items,
         "library_distribution": lib_counts,
         "credit_top5": credit_top,
@@ -1954,9 +1976,9 @@ def _emit_quality_metrics(report, n_prefilter_in, n_prefilter_out):
         "source_health": src_health,
     }
     C.save_json(os.path.join(C.STATE_DIR, "quality_metrics.json"), metrics_out)
-    LOG.info("质量巡检指标：预筛 %d→%d（丢 %d），成卡 %d，三库 %s，掉队源信用 Bottom5 %s",
+    LOG.info("质量巡检指标：预筛 %d→%d（丢 %d）[%s]，成卡 %d，三库 %s，掉队源信用 Bottom5 %s",
              n_prefilter_in, n_prefilter_out, max(0, n_prefilter_in - n_prefilter_out),
-             total_items, lib_counts, credit_bottom)
+             PREFILTER_STATS, total_items, lib_counts, credit_bottom)
 
 
 def _ensure_daily_summary(report, base_urls, api_key, model, today):
