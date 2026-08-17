@@ -50,7 +50,7 @@ REQ_TIMEOUT = (20, 300)     # 默认读超时 300s；可被环境变量 AI_REQUE
 GEN_RETRIES = 4             # 外层生成重试 4 次：用户要求必须 AI 输出、可稍晚，多给几次机会
 STREAM_MAX_SECONDS = 900    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
 MAX_INPUT_SIGNALS = 50      # 送入 AI 的候选上限（控制上下文长度保稳定）
-MAX_OUTPUT_TOKENS = 16000   # 输出 token 上限（收敛输出，降低超时/截断概率；
+MAX_OUTPUT_TOKENS = 8000   # 输出 token 上限（收敛输出，降低超时/截断概率；
                               # 探针实测 35 候选大 prompt 在 6000 处被截断导致 JSON 残缺，
                               # 后提到 12000；实测大日报（条目多、字段全）仍会触顶导致
                               # 末尾条目/字段被截，故再提到 16000 留足余量；
@@ -147,6 +147,10 @@ def _prefilter_signals(signals):
         if adf.is_emoji_spam(s.get("title") or ""):
             LOG.info("【安全闸·预筛】丢弃emoji刷屏标题")
             continue
+        # 发布前输入清洗：极限词直接抹除（不丢整条），避免 AI 读到/回写违规绝对化表达
+        if adf.has_extreme((s.get("title") or "") + " " + (s.get("content") or "")):
+            s["title"] = adf.scrub_extreme(s.get("title") or "")
+            s["content"] = adf.scrub_extreme(s.get("content") or "")
         k = C.item_dedup_key(s)
         if k:
             if k in seen:
@@ -373,6 +377,12 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
     start = time.time()
 
     # 统一限速器：免费层 RPM 滑窗 + 每日预算，避免密集调用撞 429 / 打光配额。
+    # 估算本次 token 吞吐（输入字符/2 + 最大输出），供 TPM 闸门限速
+    try:
+        _est = ((len(system_prompt or "") + len(user_prompt or "")) // 2) + MAX_OUTPUT_TOKENS
+    except Exception:
+        _est = MAX_OUTPUT_TOKENS
+    C.ai_limiter._last_est_tokens = _est
     C.ai_limiter.throttle(is_gemini=True)
 
     base_url = base_url.rstrip("/")
@@ -395,6 +405,10 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
     timeout = _req_timeout()
     mode = "stream" if stream else "non-stream"
 
+def _exp_jitter(base, attempt):
+    """指数退避 + 随机抖动：避免固定节奏撞墙，也避免退避过短。"""
+    return min(60.0, base * (2 ** (attempt - 1))) + random.uniform(0, base)
+
     # 免费层 Gemini 常见瞬时错误：503/502/504（Google 侧过载）、429（免费层限流）、空流。
     # 这些不是鉴权/配额硬失败，给 3 次指数退避重试，命中即省下兜底网关、提升主通道占比。
     GEMINI_TRANSIENT = (429, 500, 502, 503, 504)
@@ -410,7 +424,7 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
             # 流式响应里 5xx 可能以非异常形式返回，这里先判状态码
             if code in GEMINI_TRANSIENT:
                 last_err = RuntimeError(f"Gemini 原生瞬时服务端错误 {code}")
-                wait = base_delay * attempt
+                wait = _exp_jitter(base_delay, attempt)
                 LOG.warning("Gemini 原生返回 %d（瞬时），%.1fs 后重试 (%d/%d)", code, wait, attempt, max_attempts)
                 time.sleep(wait)
                 continue
@@ -429,7 +443,7 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
                 raise
             if code in GEMINI_TRANSIENT:
                 last_err = e
-                wait = base_delay * attempt
+                wait = _exp_jitter(base_delay, attempt)
                 LOG.warning("Gemini 原生 HTTP %d（瞬时），%.1fs 后重试 (%d/%d)", code, wait, attempt, max_attempts)
                 time.sleep(wait)
                 continue
@@ -478,7 +492,7 @@ def _call_gemini_native(base_url, api_key, model, system_prompt, user_prompt, st
         if not content:
             # 空流多为瞬时（连接抖动 / Google 过载），按瞬重试；用尽后再降级兜底
             last_err = RuntimeError("Gemini 原生流式响应为空")
-            wait = base_delay * attempt
+            wait = _exp_jitter(base_delay, attempt)
             LOG.warning("Gemini 原生流式响应为空（瞬时?），%.1fs 后重试 (%d/%d)", wait, attempt, max_attempts)
             time.sleep(wait)
             continue
@@ -1590,6 +1604,42 @@ def _is_skeleton(report):
     return False
 
 
+
+def _post_scrub(report):
+    """发布前最终清洗：①剥离 perspective 的「来源名|」前缀（副业视角=AI 创业者自评，不带来源）
+    ②清洗极限词/广告法禁用词（ad_filter.scrub_extreme）。就地修改 report。"""
+    if not isinstance(report, dict):
+        return report
+    for key in C.MODULES:
+        for it in report.get("modules", {}).get(key, []) or []:
+            if not isinstance(it, dict):
+                continue
+            # ① 剥离 perspective 的「来源名| / 来源名：」前缀（精确匹配本条目 source_name）
+            _src = (it.get("source_name") or "").strip()
+            _per = (it.get("perspective") or "")
+            if _src and _per:
+                _per = re.sub(r"^" + re.escape(_src) + r"[｜|：:]\s*", "", _per)
+                it["perspective"] = _per
+            # ② 清洗极限词（标题 + 全部文本字段 + perspective）
+            for _k in ("title", "signal", "perspective", "value_proposition", "how_to_mvp",
+                       "acquisition_channel", "monetization", "replicability", "summary",
+                       "content", "target_customer"):
+                _v = it.get(_k)
+                if isinstance(_v, str) and _v:
+                    _clean = adf.scrub_extreme(_v)
+                    if _clean != _v:
+                        it[_k] = _clean
+    # daily_summary 也清洗
+    _sum = report.get("daily_summary") or {}
+    if isinstance(_sum, dict):
+        for _k in list(_sum.keys()):
+            _v = _sum.get(_k)
+            if isinstance(_v, str) and _v:
+                _clean = adf.scrub_extreme(_v)
+                if _clean != _v:
+                    _sum[_k] = _clean
+    return report
+
 def _normalize_perspective(report):
     """Fix H：views_insights 允许 value_proposition 顶替 perspective 过空心门禁，
     但日报渲染只认 perspective → 顶替后卡片「副业视角」空白（run 31978375568 实锤：
@@ -2194,6 +2244,8 @@ def main():
         merged = C.merge_reports(accumulated, report)
         # Fix H：归一 views_insights 的 perspective（value_proposition 顶替回填）
         _normalize_perspective(merged)
+        # Fix I：发布前最终清洗（去来源前缀 + 极限词）
+        _post_scrub(merged)
         # ① 增量持久化：合并后立即落盘 + 记录已生成信号进度，使中途崩溃重跑时
         #    能跳过已生成条目（existing_keys 基于已存日报去重），省下重烧的 token。
         try:
