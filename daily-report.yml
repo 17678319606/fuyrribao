@@ -142,6 +142,7 @@ jobs:
 
       - name: 采集 + AI 生成 + 发布（高延迟 AI 收敛重试）
         if: steps.preflight.outputs.skip != '1'
+        timeout-minutes: 40
         run: |
           STEP_START=$(date +%s)
           MAX_TRIES=2
