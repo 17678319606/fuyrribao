@@ -28,7 +28,6 @@ env:
   TZ: Asia/Shanghai
   ai_api_key: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
   AI_SIDEHUSTLE_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
-  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
