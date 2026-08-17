@@ -19,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  DOCGEN_EMERGENCY: ${{ github.event.inputs.emergency == 'true' && '1' || '' }}
   TZ: Asia/Shanghai
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
   # —— AI 主用 Gemini 原生 API；璇玑兜底（与 daily-report.yml 保持一致）——
