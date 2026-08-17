@@ -239,15 +239,6 @@
     "rationale": "AI 产品/行业动态，高质量英文源"
   },
   {
-    "id": "marktechpost",
-    "type": "rss",
-    "url": "https://www.marktechpost.com/feed/",
-    "name": "MarkTechPost",
-    "added_by": "curated-replace",
-    "added_date": "2026-08-17",
-    "rationale": "AI/ML 研究与应用实战，强技术相关"
-  },
-  {
     "id": "simonwillison",
     "type": "rss",
     "url": "https://simonwillison.net/atom/everything/",
