@@ -47,16 +47,12 @@ env:
   DOCGEN_CLEAN: ${{ github.event.inputs.clean }}
   # —— WordPress ——（地址/账号/分类已在代码默认，这里只放应用密码）
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-  # —— AI 后端：主用 Gemini 原生 API（AI Studio AQ. key，经 GEMINI_API_KEY 注入）；
-  #   璇玑国内网关(api.jinbufenzi.com/v1)降为兜底（AI_FALLBACK_*），主用不可达/
-  #   限流/额度耗尽时自动接管。模型钉 gemini-2.5-flash（稳定 GA、免费额度足），
-  #   避免 gemini-flash-latest 浮动别名在 Google GA 新版时悄悄改变行为。
-  AI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta"
-  AI_MODEL: "gemini-2.5-flash"
-  AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-  AI_FALLBACK_URL: "https://ai.jinbufenzi.com/v1"
-  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
-  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  # —— AI 后端：唯一使用 jinbufenzi 国内网关（OpenAI 兼容），AI_SIDEHUSTLE_API_KEY 鉴权。
+  #   已取消 Gemini 原生接入（跨境瓶颈 + 免费层限流/拥堵会导致长时间挂起，且 jinbufenzi
+  #   才是真正被调用的网关）。模型 auto（网关自动选最优模型）。
+  AI_BASE_URL: "https://ai.jinbufenzi.com/v1"
+  AI_MODEL: "auto"
+  AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
   # 公众号推送已移交 WordPress 插件（fuyr-wechat-pusher）在源站直连微信 API，
   # CI 不再注入任何 WX_* 密钥/代理；AppID/AppSecret 仅存于 WP 后台设置页。
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
