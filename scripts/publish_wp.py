@@ -178,7 +178,13 @@ S_TEXT_LINK = "color:#2f6b5e;font-weight:600;"
 
 S_FOOTER = "margin-top:48px;text-align:center;color:#b0aca3;font-size:12px;padding-top:20px;border-top:1px solid #e6e3dd;"
 
-# 赞赏区样式（正文底部，点击展开二维码，不影响阅读）
+# ── 品牌标识（全文唯一真实来源，WP 站点标题由后台设置，此处控制文章内 footer）──
+
+SITE_BRAND = "副业日报"
+
+SITE_URL = "https://dajiayouxuan.com"
+
+# 赞赏区样式（正文底部，点击展开二维码，不影响阅读；SVG 按钮兼容公众号+WP）
 
 S_TIP_WRAP = ("margin-top:36px;text-align:center;"
 
@@ -194,7 +200,16 @@ S_TIP_BTN = ("display:inline-flex;align-items:center;gap:8px;"
 
              "background:#fff!important;border:1.5px solid #e6d5a8!important;"
 
-             "list-style:none;user-select:none;transition:all .25s;")
+             "list-style:none;user-select:none;")
+
+# 内联 SVG 赏赏图标（咖啡杯，纯路径无外部依赖，兼容公众号/WP/任意 HTML 渲染器）
+
+_TIP_SVG_ICON = (
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="M2 21h18c.6 0 1-.4 1-1V8c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v12c0 .6.4 1 1 1z" stroke="#b88a2f" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    '<path d="M22 11h-2c-1.1 0-2 .9-2 2v1c0 1.1.9 2 2 2h2v-5z" stroke="#b88a2f" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    '</svg>'
+)
 
 S_TIP_QR = ("max-width:220px;margin:16px auto 0;border-radius:12px;"
 
@@ -620,7 +635,7 @@ def render(report):
 
             f'<details style="margin:0;">'
 
-            f'<summary style="{S_TIP_BTN}">☕ 觉得有用？赞赏支持</summary>'
+            f'<summary style="{S_TIP_BTN}">{_TIP_SVG_ICON}<span>觉得有用？赞赏支持</span></summary>'
 
             f'<div style="{S_TIP_QR}">'
 
@@ -656,7 +671,7 @@ def render(report):
 
         f'本文由 AI 驱动生成，每日调用大模型 API 汇总筛选 · '
 
-        f'<a href="https://dajiayouxuan.com" style="color:#2f6b5e;text-decoration:none;">大家有选</a>'
+        f'<a href="{SITE_URL}" style="color:#2f6b5e;text-decoration:none;">{SITE_BRAND}</a>'
 
         f'</footer>\n'
 
