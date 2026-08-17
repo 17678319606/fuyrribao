@@ -124,6 +124,60 @@ def _normalize_title(t):
     return t
 
 
+# 模块2：多维价值得分（仅让高时效 / 高实操密度 / 低广告 / 高相关的内容进入 AI）
+VALUE_SCORE_THRESHOLD = 50   # 价值度得分 ≥ 此值才进入 AI；低于则丢弃
+VALUE_SCORE_MIN_KEEP = 60    # 兜底：即便达标数不足，也至少保留得分最高的 N 条（防空闲/空日报）
+
+
+def _value_score(s):
+    """多维价值度得分（0-100）：时效 0.30 + 实操密度 0.40 + 抗广告 0.20 + 相关 0.10。
+    零 LLM，在 _prefilter_signals 内对每条信号打分，用于「价值门禁」。
+    """
+    import re as _re
+    from datetime import datetime as _dt, timezone as _tz
+    title = (s.get("title") or "")
+    content = (s.get("content") or "")
+    text = (title + " " + content).strip()
+    if not text:
+        return 0.0
+    # ① 时效（timeliness）：published_at 距今天数，7 天窗口线性衰减
+    t_score = 0.5
+    pub = s.get("published_at") or ""
+    try:
+        _pub = pub.replace("Z", "+00:00") if pub.endswith("Z") else pub
+        _dtobj = _dt.fromisoformat(_pub)
+        if _dtobj.tzinfo is None:
+            _dtobj = _dtobj.replace(tzinfo=_tz.utc)
+        _days = (C.beijing_now() - _dtobj.astimezone(C.BJ)).total_seconds() / 86400.0
+        if _days < 0:
+            _days = 0
+        t_score = max(0.0, min(1.0, 1.0 - _days / 7.0))
+    except Exception:
+        pass
+    # ② 实操密度（practical_density）：正文长度 + 具体信号（数字/金额/工具/步骤）
+    _len = min(1.0, len(content) / 400.0)
+    _concrete = 0
+    if _re.search(r"\d", content):
+        _concrete += 1
+    if _re.search(r"[元¥$￥%]|步骤|工具|平台|渠道|ROI|转化率|用户数|月入|成本|变现", content):
+        _concrete += 1
+    if _re.search(r"https?://|小程序|App|网站|脚本|API|SaaS|社群|模板", content):
+        _concrete += 1
+    p_score = 0.4 * _len + 0.6 * min(1.0, _concrete / 3.0)
+    # ③ 抗广告（anti_ad）：已通过硬清洗，但带自推/极限词痕迹的降权
+    if adf.is_promo(title):
+        a_score = 0.6
+    elif adf.has_extreme(text):
+        a_score = 0.8
+    else:
+        a_score = 1.0
+    # ④ 相关（relevance）：命中主题关键词比例
+    _hits = sum(1 for kw in C.SOURCE_RELEVANCE_KEYWORDS if kw.lower() in text.lower())
+    r_score = min(1.0, _hits / 3.0)
+    score = 100.0 * (0.30 * t_score + 0.40 * p_score + 0.20 * a_score + 0.10 * r_score)
+    return round(score, 1)
+
+
 def _prefilter_signals(signals):
     """送 AI 前的免费预筛（零 LLM 调用，不破免费额度）：去重 + 丢桩。
 
@@ -184,7 +238,19 @@ def _prefilter_signals(signals):
             pass
         gated.append(s)
     LOG.info("免费预筛：%d → %d（去重+丢桩+实质门禁，含标题归一化去重）", len(signals), len(gated))
-    return gated
+    # 模块2：价值度门禁——仅让高价值内容进入 AI；兜底保底 N 条防空日报
+    _scored = []
+    for _s in gated:
+        _s = dict(_s)
+        _s["value_score"] = _value_score(_s)
+        _scored.append(_s)
+    _scored.sort(key=lambda x: x.get("value_score", 0), reverse=True)
+    _passed = [x for x in _scored if x["value_score"] >= VALUE_SCORE_THRESHOLD]
+    if len(_passed) < VALUE_SCORE_MIN_KEEP:
+        _passed = _scored[:VALUE_SCORE_MIN_KEEP]
+    LOG.info("价值度门禁：%d → %d（阈值 %d，兜底 %d）", len(gated), len(_passed),
+             VALUE_SCORE_THRESHOLD, VALUE_SCORE_MIN_KEEP)
+    return _passed
 
 
 def _is_valid_proxy(p):
@@ -1605,6 +1671,44 @@ def _is_skeleton(report):
 
 
 
+# 模块3：重点观点源（必须原文引用 + 简短思考，禁止 AI 改写）
+KEY_SOURCE_NAMES = {"中年指南", "zhongnianren"}
+_LIBRARY_LABELS = {
+    "project_opportunities": "机会库",
+    "growth_operations": "增长运营库",
+    "views_insights": "观点心法库",
+}
+
+
+def _enrich_library_and_quote(report, raw_signals=None):
+    """模块3：① 给每条 item 打 library（中文库名）标签，便于前端按库分组；
+    ② 重点观点源(中年指南)的「观点心法」条目强制注入原文(quote_original)——
+       原始网页文本直接展示，AI 只负责加简短思考(perspective)，绝不改写原文。
+    就地修改 report。
+    """
+    raw_by_id, raw_by_url = {}, {}
+    if raw_signals:
+        for _s in raw_signals:
+            _i = _s.get("id")
+            _u = _s.get("source_url")
+            if _i:
+                raw_by_id[_i] = _s
+            if _u:
+                raw_by_url[_u] = _s
+    for _mod in C.MODULES:
+        for _it in report.get("modules", {}).get(_mod, []) or []:
+            if not isinstance(_it, dict):
+                continue
+            _it["library"] = _LIBRARY_LABELS.get(_mod, _mod)
+            if _mod == "views_insights" and (_it.get("source_name") in KEY_SOURCE_NAMES):
+                _raw = raw_by_id.get(_it.get("id")) or raw_by_url.get(_it.get("source_url"))
+                if _raw:
+                    _orig = (_raw.get("content") or _raw.get("title") or "").strip()
+                    if _orig:
+                        _it["quote_original"] = _orig
+    return report
+
+
 def _post_scrub(report):
     """发布前最终清洗：①剥离 perspective 的「来源名|」前缀（副业视角=AI 创业者自评，不带来源）
     ②清洗极限词/广告法禁用词（ad_filter.scrub_extreme）。就地修改 report。"""
@@ -2244,6 +2348,8 @@ def main():
         merged = C.merge_reports(accumulated, report)
         # Fix H：归一 views_insights 的 perspective（value_proposition 顶替回填）
         _normalize_perspective(merged)
+        # 模块3：打 library 标签 + 重点源原文引用注入
+        _enrich_library_and_quote(merged, new_signals)
         # Fix I：发布前最终清洗（去来源前缀 + 极限词）
         _post_scrub(merged)
         # ① 增量持久化：合并后立即落盘 + 记录已生成信号进度，使中途崩溃重跑时
