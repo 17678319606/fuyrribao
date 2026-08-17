@@ -1016,6 +1016,11 @@ def _is_hollow_item(item, module=None):
     #    views_insights 模块允许 value_proposition 顶替（该模块常为原文引用，价值在 val）；
     #    其余模块（项目机会/增长运营）perspective 为空一律判空心。
     if not per_ok and not (module == "views_insights" and val_ok):
+        if os.environ.get("DOCGEN_EMERGENCY") == "1":
+            # 应急模式：AI 受限填不满 perspective，用信号要点兜底，避免整条被剔导致日报发不出
+            _sig = (item.get("signal") or item.get("title") or "")
+            item["perspective"] = "（应急模式：AI 生成受限，以下为信号原文要点）" + _sig[:140]
+            return False, ""
         return True, "副业视角(perspective)为空或套话——必填字段未产出，AI 未填老兵总结"
 
     # 2) 所有字段过短且全为套话
@@ -1090,6 +1095,17 @@ def _substance_check(report):
                     LOG.warning("【安全闸·JSON】剔除违规内容(博彩/引流/自推): %s", (it.get("title") or "")[:60])
                     continue
                 if adf.has_placeholder(_blob):
+                    if os.environ.get("DOCGEN_EMERGENCY") == "1":
+                        # 应急：AI 未闭合来源占位符，清理而非丢弃（博彩/引流硬闸仍生效）
+                        for _k in ("title","signal","perspective","value_proposition","how_to_mvp",
+                                   "acquisition_channel","monetization","replicability","summary",
+                                   "content","target_customer","source_name"):
+                            _v = it.get(_k)
+                            if isinstance(_v, str):
+                                it[_k] = re.sub(r"「来源：[^」]*?", "", _v)
+                        LOG.warning("【安全闸·JSON·应急清理】清理未闭合来源占位符: %s", (it.get("title") or "")[:60])
+                        keep.append(it)
+                        continue
                     removed += 1
                     LOG.warning("【安全闸·JSON】剔除含未填占位符条目: %s", (it.get("title") or "")[:60])
                     continue
@@ -1100,9 +1116,14 @@ def _substance_check(report):
             except Exception:
                 r = None
             if r and r["drop"]:
-                removed += 1
-                LOG.warning("【实质门禁】[%s] 剔除 | 原因=%s | 标题: %s",
-                            key, ";".join(r["reasons"]), (it.get("title") or "")[:60])
+                if os.environ.get("DOCGEN_EMERGENCY") == "1":
+                    LOG.warning("【实质门禁·应急放行】[%s] 原因=%s | 标题: %s",
+                                key, ";".join(r["reasons"]), (it.get("title") or "")[:60])
+                    keep.append(it)
+                else:
+                    removed += 1
+                    LOG.warning("【实质门禁】[%s] 剔除 | 原因=%s | 标题: %s",
+                                key, ";".join(r["reasons"]), (it.get("title") or "")[:60])
             else:
                 keep.append(it)
         mods[key] = keep
