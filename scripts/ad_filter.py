@@ -97,10 +97,12 @@ _PLACEHOLDER = re.compile(r"「来源：[^」\n]{1,30}(?!\」)")
 
 
 def safety_hard_filter(text):
-    """返回命中的违规类别列表；空列表=安全。无条件优先于 exempt。"""
-    # 禁词库（极限词）仅作可观测统计命中，不直接丢弃——清洗由 generate_report 调用 scrub_extreme 完成。
-    if has_extreme(text):
-        hits.append("extreme_word")
+    """返回命中的违规类别列表；空列表=安全。无条件优先于 exempt。
+
+    注意：极限词（广告法禁用词）不在此处硬删——仅作可观测，清洗由
+    generate_report 的 scrub_extreme 分支完成。本函数只命中真实违规类别
+    （博彩/引流/自推/emoji 等），返回非空即触发硬删。
+    """
     if not text:
         return []
     hits = []
