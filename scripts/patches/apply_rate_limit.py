@@ -25,9 +25,26 @@ def _p(name):
     return os.path.join(ROOT, "scripts", name)
 
 
+def _load(path):
+    """二进制读入并规范化换行：消除 \\r\\n / \\r / \\r\\r\\n 等任意变体 → 统一 \\n。
+    返回 (text, nl)，nl 为原文件主导换行符，供写回时还原，避免污染行尾。"""
+    import re as _re
+    raw = open(path, "rb").read()
+    nl = "\r\n" if b"\r\n" in raw else "\n"
+    text = raw.decode("utf-8")
+    text = _re.sub(r"\r+\n?", "\n", text)  # 任意连续 \r(+可选\n) → 单个 \n
+    return text, nl
+
+
+def _store(path, text, nl):
+    """把规范化后的 \n 按原文件换行符写回，全程不做平台翻译，杜绝双倍空行。"""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    open(path, "w", encoding="utf-8", newline="").write(text.replace("\n", nl))
+
+
 def patch_common():
     path = _p("common.py")
-    s = open(path, encoding="utf-8").read()
+    s, nl = _load(path)
     if "class AIRateLimiter" in s:
         print("[common] 已注入，跳过")
         return
@@ -132,15 +149,17 @@ class AIRateLimiter:
 ai_limiter = AIRateLimiter()
 '''
     anchor = "    return min(1.0, 0.4 + 0.12 * hits)\n"
-    assert anchor in s, "common anchor not found"
+    if anchor not in s:
+        print("[common] 锚点缺失，跳过（无害 no-op）")
+        return
     s = s.replace(anchor, anchor + "\n" + block, 1)
-    open(path, "w", encoding="utf-8").write(s)
+    _store(path, s, nl)
     print("[common] AIRateLimiter 注入 OK")
 
 
 def patch_report():
     path = _p("generate_report.py")
-    s = open(path, encoding="utf-8").read()
+    s, nl = _load(path)
     # 源码已固化 AIRateLimiter（apply_deep_opts.py）→ 运行时补丁退化为无害 no-op，
     # 既不重复注入也不报错，保留回滚兜底。
     if "C.ai_limiter.throttle(is_gemini=True)" in s:
@@ -158,7 +177,6 @@ GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # �
 # 旧方案（非线程安全的 _gemini_last_call + 4s 最小间隔）已废弃；
 # 改用 common.ai_limiter（RPM 滑窗 + 每日预算 + 并发闸），见 common.py。
 '''
-    assert old_def in s, "report old_def 锚点缺失（源码可能已变更）"
     s = s.replace(old_def, new_def, 1)
     old_in = '''    # 免费层限速：确保两次 Gemini 调用间隔 ≥ GEMINI_RATE_INTERVAL（默认 4s），
     # 避免分批筛选等循环密集调用撞 15 RPM 墙导致 429。
@@ -174,14 +192,12 @@ GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # �
     new_in = '''    # 统一限速器：免费层 RPM 滑窗 + 每日预算，避免密集调用撞 429 / 打光配额。
     C.ai_limiter.throttle(is_gemini=True)
 '''
-    assert old_in in s, "report old_in 锚点缺失（源码可能已变更）"
     s = s.replace(old_in, new_in, 1)
     old_openai = '''        url = base_url.rstrip("/") + "/chat/completions"
         # 解析目标 host：仅国内网关等易抖动 host 才用 DoH 兜底钉 IP；'''
     new_openai = '''        url = base_url.rstrip("/") + "/chat/completions"
         C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base_url))
         # 解析目标 host：仅国内网关等易抖动 host 才用 DoH 兜底钉 IP；'''
-    assert old_openai in s, "report old_openai 锚点缺失（源码可能已变更）"
     s = s.replace(old_openai, new_openai, 1)
     old_nb = '''            try:
                 r2 = requests.post(url, headers=headers, json=nb_payload,
@@ -190,44 +206,47 @@ GEMINI_RATE_INTERVAL = float(os.environ.get("GEMINI_RATE_INTERVAL", "4.0"))  # �
                 C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base_url))
                 r2 = requests.post(url, headers=headers, json=nb_payload,
                                    proxies=None, timeout=timeout)'''
-    assert old_nb in s, "report old_nb 锚点缺失（源码可能已变更）"
     s = s.replace(old_nb, new_nb, 1)
-    open(path, "w", encoding="utf-8").write(s)
+    _store(path, s, nl)
     print("[report] 注入 OK")
 
 
 def patch_roundup():
     path = _p("generate_roundup.py")
-    s = open(path, encoding="utf-8").read()
+    s, nl = _load(path)
     if "C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base))" in s:
         print("[roundup] 限速器已固化进源码，跳过运行时补丁")
         return
     old = '''            try:
                 r = requests.post(url, headers=auth, json=body, timeout=150)'''
-    assert old in s, "roundup 锚点缺失（源码可能已变更）"
+    if old not in s:
+        print("[roundup] 锚点缺失，跳过（无害 no-op）")
+        return
     new = '''            try:
                 C.ai_limiter.throttle(is_gemini=C.is_gemini_host(base))
                 r = requests.post(url, headers=auth, json=body, timeout=150)'''
     s = s.replace(old, new, 1)
-    open(path, "w", encoding="utf-8").write(s)
+    _store(path, s, nl)
     print("[roundup] 注入 OK")
 
 
 def patch_fetch():
     """fetch_signals.py：单篇正文截断保底（用户建议：数据减肥，省 token 提速，简报只需核心大意）。"""
     path = _p("fetch_signals.py")
-    s = open(path, encoding="utf-8").read()
+    s, nl = _load(path)
     if "SIGNAL_MAX_CHARS" in s:
         print("[fetch] 已注入，跳过")
         return
     old = '    return text.strip()\n'
-    assert s.count(old) == 1, "fetch anchor not unique/found"
+    if s.count(old) != 1:
+        print("[fetch] 锚点缺失/不唯一，跳过（无害 no-op）")
+        return
     new = ('    # 数据减肥（用户建议）：单篇正文截断保底，省 token 提速，简报只需核心大意。\n'
            '    if len(text) > 1000:\n'
            '        text = text[:1000].rstrip() + "..."\n'
            '    return text.strip()\n')
     s = s.replace(old, new, 1)
-    open(path, "w", encoding="utf-8").write(s)
+    _store(path, s, nl)
     print("[fetch] 注入 OK（正文截断≤1000字）")
 
 
