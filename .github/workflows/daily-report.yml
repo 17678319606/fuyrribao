@@ -10,7 +10,7 @@
 #       已设 FUYR_DISABLE_PUBLISH=1 跳过 WordPress 发布，不会与本职发布方冲突。
 #       GitHub Actions 才是唯一的真实发布方（详见仓库根 trigger_daily.sh）。
 #
-# AI 后端：Gemini 原生 API 主用（AI Studio AQ. 密钥），璇玑 ai.jinbufenzi.com 作兜底（env 中配置）
+# AI 后端：璇玑国内网关 ai.jinbufenzi.com 唯一（OpenAI 兼容，AI_SIDEHUSTLE_API_KEY 鉴权，已验证可出文章）
 # 发布目标：WordPress + 公众号（freepublish，由 WP 插件在源站直连微信 API）
 # 密钥全部走 GitHub Secrets，绝不硬编码。
 name: 副业日报每日生成
@@ -52,15 +52,11 @@ env:
   DOCGEN_EMERGENCY: ${{ github.event.inputs.emergency == 'true' && '1' || '' }}
   # —— WordPress ——（地址/账号/分类已在代码默认，这里只放应用密码）
   WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-  # —— AI 主用 Gemini 原生 API（AI Studio AQ. 密钥，仅支持原生端点 generativelanguage.googleapis.com/v1beta）——
-  AI_BASE_URL: https://generativelanguage.googleapis.com/v1beta
-  AI_MODEL: gemini-flash-latest
-  # 主用 key：AI_BASE_URL 指向 Gemini 原生 → 代码自动回落 GEMINI_API_KEY（generate_report.py 1347-1351）
-  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-  # —— 兜底：璇玑国内网关（主用不可达/限流/额度耗尽时自动回退，不宕机）——
-  AI_FALLBACK_URL: https://ai.jinbufenzi.com/v1
-  AI_FALLBACK_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
-  AI_FALLBACK_MODEL: auto
+  # —— AI 后端：唯一使用 jinbufenzi 国内网关（OpenAI 兼容），AI_SIDEHUSTLE_API_KEY 鉴权。
+  #   已取消 Gemini 原生接入（跨境瓶颈 + 免费层限流/拥堵会导致长时间挂起）。模型 auto（网关自动选最优）。
+  AI_BASE_URL: "https://ai.jinbufenzi.com/v1"
+  AI_MODEL: "auto"
+  AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
   # 公众号推送已移交 WordPress 插件（fuyr-wechat-pusher）在源站直连微信 API，
   # CI 不再注入任何 WX_* 密钥/代理；AppID/AppSecret 仅存于 WP 后台设置页。
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -86,7 +82,7 @@ jobs:
       - name: 安装依赖
         run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks Pillow
 
-      - name: 注入 AI 限速器（免费 Gemini 配额保护，防 429）
+      - name: 注入 AI 限速器（jinbufenzi 网关保护）
         run: python scripts/patches/apply_rate_limit.py
 
       - name: 恢复状态缓存（seen.json / CID 快照 / 当日累积日报，走缓存而非提交 git，避免仓库膨胀）
