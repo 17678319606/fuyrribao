@@ -48,7 +48,7 @@ RETRY_PER_ENDPOINT = 2      # 每端点重试：收敛防时间爆炸；冗余�
 BACKOFF_BASE = 8            # 退避基数 8s：网关高延迟，更长退避让其喘气（用户允许稍晚生成）
 REQ_TIMEOUT = (20, 300)     # 默认读超时 300s；可被环境变量 AI_REQUEST_TIMEOUT 覆盖
 GEN_RETRIES = 4             # 外层生成重试 4 次：用户要求必须 AI 输出、可稍晚，多给几次机会
-STREAM_MAX_SECONDS = 900    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
+STREAM_MAX_SECONDS = 360    # 单次流式读取整体 wall-clock 上限：防端点极慢吐数据/无 [DONE] 标记导致无限 hang
 MAX_INPUT_SIGNALS = 50      # 送入 AI 的候选上限（控制上下文长度保稳定）
 MAX_OUTPUT_TOKENS = 8000   # 输出 token 上限（收敛输出，降低超时/截断概率；
                               # 探针实测 35 候选大 prompt 在 6000 处被截断导致 JSON 残缺，
