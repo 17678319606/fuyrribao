@@ -1910,6 +1910,55 @@ def _emit_changed(changed):
         pass
 
 
+def _emit_quality_metrics(report, n_prefilter_in, n_prefilter_out):
+    """每日质量巡检指标：价值度门禁、三库分布、源信用掉队观察。
+
+    输出到 state/quality_metrics.json（纯本地，零 LLM），供交叉审计与监控看板读取。
+    非阻塞：任何异常都不影响主流程。
+    """
+    try:
+        import source_manager as SM
+    except Exception:
+        SM = None
+    # 三库分布（按 library 标签聚合，回退到模块名）
+    lib_counts = {}
+    total_items = 0
+    for mod in C.MODULES:
+        for it in (report.get("modules", {}) or {}).get(mod, []):
+            total_items += 1
+            lib = it.get("library") or mod
+            lib_counts[lib] = lib_counts.get(lib, 0) + 1
+    # 源信用掉队观察
+    credit_top, credit_bottom, src_health = [], [], {}
+    if SM is not None:
+        try:
+            credit_top = SM.top_credits(5)
+            credit_bottom = SM.bottom_credits(5)
+            metrics = SM._load_metrics()
+            fused = sum(1 for m in metrics.values()
+                        if isinstance(m, dict) and m.get("credit", C.CREDIT_INIT) <= C.CREDIT_RETIRE)
+            retired = sum(1 for m in metrics.values()
+                          if isinstance(m, dict) and m.get("status") == "retired")
+            src_health = {"total": len(metrics), "fused": fused, "retired": retired}
+        except Exception:
+            pass
+    metrics_out = {
+        "date": C.date_str(),
+        "generated_at": datetime.datetime.now().isoformat(),
+        "prefilter": {"in": n_prefilter_in, "out": n_prefilter_out,
+                      "dropped": max(0, n_prefilter_in - n_prefilter_out)},
+        "report_items": total_items,
+        "library_distribution": lib_counts,
+        "credit_top5": credit_top,
+        "credit_bottom5": credit_bottom,
+        "source_health": src_health,
+    }
+    C.save_json(os.path.join(C.STATE_DIR, "quality_metrics.json"), metrics_out)
+    LOG.info("质量巡检指标：预筛 %d→%d（丢 %d），成卡 %d，三库 %s，掉队源信用 Bottom5 %s",
+             n_prefilter_in, n_prefilter_out, max(0, n_prefilter_in - n_prefilter_out),
+             total_items, lib_counts, credit_bottom)
+
+
 def _ensure_daily_summary(report, base_urls, api_key, model, today):
     """末波保证 daily_summary 完整：主生成若被截断/遗漏（daily_summary 在 JSON 尾部最易被掐），
     单独补一次聚焦生成，确保『完整日报』含『每日总结·可复用方法论』。非末波不要求，直接跳过。"""
@@ -2055,7 +2104,9 @@ def main():
             existing_keys.add(C.item_dedup_key(it))
 
     # 送 AI 前的免费预筛（去重 + 丢桩，零 LLM）
+    _prefilter_in = len(signals)
     signals = _prefilter_signals(signals)
+    _prefilter_out = len(signals)
 
     # 本次新增（未被当日累积过的）信号
     new_signals = [s for s in signals if C.item_dedup_key(s) not in existing_keys]
@@ -2414,6 +2465,11 @@ def main():
         SM.record_contributions(report)
     except Exception as e:
         LOG.warning("源成卡统计失败（不影响主流程）: %s", e)
+    # —— 每日质量巡检指标（监控/交叉审计用，非阻塞）——
+    try:
+        _emit_quality_metrics(report, _prefilter_in, _prefilter_out)
+    except Exception as e:
+        LOG.warning("质量巡检指标输出失败（不影响发布）: %s", e)
     try:
         out_chars = len(json.dumps(report, ensure_ascii=False))
         C.log_run_cost(chars_out=out_chars, tag="generate_report")
