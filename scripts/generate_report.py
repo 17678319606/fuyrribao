@@ -27,6 +27,7 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
 import score  # 打分地基（通用层 + 主题层 yaml）；当前仅 SHADOW，不拦截
+import ad_filter as adf   # 硬安全闸（广告/博彩/引流/自推/emoji/占位符），无条件优先于 exempt
 
 LOG = C.get_logger()
 
@@ -135,6 +136,17 @@ def _prefilter_signals(signals):
     seen, out = set(), []
     seen_titles = set()  # 归一化标题去重（防跨源重复）
     for s in signals:
+        # —— 硬安全闸（预筛·无条件优先于 exempt）——
+        _raw = ((s.get("title") or "") + " " + (s.get("content") or ""))
+        if adf.safety_hard_filter(_raw):
+            LOG.info("【安全闸·预筛】丢弃违规内容(博彩/引流/自推/emoji): %s", (s.get("title") or "")[:50])
+            continue
+        if adf.is_promo((s.get("title") or "")):
+            LOG.info("【安全闸·预筛】丢弃自推/推广标题: %s", (s.get("title") or "")[:50])
+            continue
+        if adf.is_emoji_spam(s.get("title") or ""):
+            LOG.info("【安全闸·预筛】丢弃emoji刷屏标题")
+            continue
         k = C.item_dedup_key(s)
         if k:
             if k in seen:
@@ -1061,6 +1073,19 @@ def _substance_check(report):
         keep = []
         for it in items:
             try:
+                # ① 硬安全闸：无条件优先于 zhongnianren exempt —— 任何源的博彩/引流/违法内容都拦截
+                _blob = " ".join(str(it.get(k) or "") for k in
+                                 ("title", "signal", "perspective", "value_proposition",
+                                  "how_to_mvp", "acquisition_channel", "monetization",
+                                  "replicability", "summary", "content", "target_customer"))
+                if adf.safety_hard_filter(_blob):
+                    removed += 1
+                    LOG.warning("【安全闸·JSON】剔除违规内容(博彩/引流/自推): %s", (it.get("title") or "")[:60])
+                    continue
+                if adf.has_placeholder(_blob):
+                    removed += 1
+                    LOG.warning("【安全闸·JSON】剔除含未填占位符条目: %s", (it.get("title") or "")[:60])
+                    continue
                 # 聚合源(zhongnianren)的人情味观点豁免"观点模块弱内容"拦截，
                 # 避免"去 AI 味"被质量门反噬（新闻复述/虚假实测/空洞 How-to 仍拦截）。
                 exempt_views = C.is_aggregator_source(it.get("source_name"))
@@ -1077,6 +1102,15 @@ def _substance_check(report):
     if removed > 0:
         LOG.warning("【实质含量门禁】共剔除 %d 条废经验/新闻通告，剩余 %d 条",
                     removed, sum(len(m) for m in mods.values()))
+    # ② 硬安全闸：摘要也扫一遍（纵深防御）
+    _sum = report.get("daily_summary") or {}
+    _sum_text = " ".join(str(_sum.get(k) or "") for k in ("methodology", "text", "summary", "content"))
+    if adf.safety_hard_filter(_sum_text):
+        LOG.warning("【安全闸·JSON】摘要含违规内容，清空摘要以保合规")
+        if isinstance(_sum, dict):
+            for _k in list(_sum.keys()):
+                _sum[_k] = ""
+            report["daily_summary"] = _sum
     return report, removed
 
 
