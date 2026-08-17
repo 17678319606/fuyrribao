@@ -60,6 +60,10 @@ jobs:
       - name: 生成并发布主题合集
         run: python scripts/generate_roundup.py
 
+      - name: 发布后合规扫描（命中博彩/引流即自动删帖并告警）
+        if: success()
+        run: python scripts/wp_safety_scan.py
+
       - name: 保存状态缓存
         if: always()
         uses: actions/cache/save@v4
