@@ -463,6 +463,11 @@ def main():
                      sid, sid in _dead_blacklist, cfg.get("status") == "retired")
             src_status[sid] = {"ok": True, "reason": "retired_or_blacklisted", "got": 0, "fresh": 0}
             continue
+        # 模块1：源信用熔断——credit ≤ CREDIT_RETIRE 的源自动跳过（自动熔断，防空耗与误告警）。
+        if SM.is_fused(sid):
+            LOG.info("源 %s 信用熔断(credit≤阈值)，跳过抓取。", sid)
+            src_status[sid] = {"ok": True, "reason": "credit_fused", "got": 0, "fresh": 0}
+            continue
         # P2：跳过显式禁用 / CI 不可达的源（如 reddit JSON、被数据中心 IP 封的 feed），
         # 既避免无谓的 403 抓取与 credit 自愈空耗，也避免触发"源抓取失败"误告警。
         if cfg.get("enabled") is False or cfg.get("ci_blocked"):
@@ -479,8 +484,16 @@ def main():
         try:
             items = parser(cfg)
         except Exception as e:
-            LOG.warning("源 %s 抓取失败: %s", cfg.get("id"), e)
-            src_status[sid] = {"ok": False, "reason": "fetch_error", "got": 0, "fresh": 0}
+            _resp = getattr(e, "response", None)
+            _is403 = bool(_resp) and getattr(_resp, "status_code", None) == 403
+            if _is403:
+                # 数据中心 IP 偶发 403（非源本身失效）→ 抖动豁免：不计入死源、信用系统中性处理
+                LOG.warning("源 %s 抓取遇 403（数据中心 IP 偶发封锁，按抖动豁免，不计入死源）: %s",
+                            cfg.get("id"), e)
+                src_status[sid] = {"ok": False, "reason": "http_403", "got": 0, "fresh": 0}
+            else:
+                LOG.warning("源 %s 抓取失败: %s", cfg.get("id"), e)
+                src_status[sid] = {"ok": False, "reason": "fetch_error", "got": 0, "fresh": 0}
             continue
         # 去重（按 id）：仅屏蔽「既往日」已见过的信号，允许同日重跑重新采集。
         # 这样「移到回收站后重跑 / 同日多次执行」都能重新产出候选，再由 publish 覆盖更新。
@@ -579,6 +592,14 @@ def main():
         SM.record_run(src_status)
     except Exception as e:
         LOG.warning("源指标记录失败（不影响主流程）: %s", e)
+
+    # 模块1：Top-5 信用巡检（监控接入广度与源健康度）
+    try:
+        _top = SM.top_credits(5)
+        if _top:
+            LOG.info("源信用 Top5: %s", ", ".join("%s=%d" % (s, c) for s, c in _top))
+    except Exception:
+        pass
 
     # 死源自动隔离：连续抓取失败达阈值（仅计 fetch_error）的源写入 dead_sources.json（小黑屋），
     # 下次运行由主循环跳过，避免长期 403 源反复空耗 credit 与触发"源抓取失败"误告警。
