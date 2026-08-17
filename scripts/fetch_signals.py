@@ -126,6 +126,10 @@ def parse_rss(cfg):
     # 改为先走受控 _http_get（90s 读取超时 + 重试），再 parseString。
     try:
         resp = _http_get(url)
+        try:
+            resp.encoding = resp.apparent_encoding or resp.encoding
+        except Exception:
+            pass
         raw = resp.text
     except Exception:
         # P1-C 修复：抓取失败必须让 main() 外层 except 知道（标 ok=False），
@@ -429,10 +433,36 @@ def main():
     today = C.date_str()
     LOG.info("开始采集，源数量=%d，冷启动=%s，今日=%s", len(sources), cold, today)
 
+    # 死源黑名单（小黑屋）：手动 retired 或自动连续抓取失败达阈值的源在此列出，
+    # 主循环跳过它们，避免反复 403 空耗 credit 与触发"源抓取失败"误告警。
+    _dead_path = os.path.join(C.STATE_DIR, "dead_sources.json")
+    _streak_path = os.path.join(C.STATE_DIR, "source_fail_streak.json")
+    _dead_blacklist = set()
+    try:
+        _d = C.load_json(_dead_path, [])
+        if isinstance(_d, list):
+            _dead_blacklist = set(str(x) for x in _d)
+    except Exception:
+        pass
+    _streak = {}
+    try:
+        _s = C.load_json(_streak_path, {})
+        if isinstance(_s, dict):
+            _streak = {str(k): int(v) for k, v in _s.items()}
+    except Exception:
+        pass
+    DEAD_STREAK_THRESHOLD = 5
+
     candidates = []
     src_status = {}  # 源可用性状态：供后续告警/巡检使用
     for cfg in sources:
         sid = cfg.get("id")
+        # 跳过已退役(retired) / 死源黑名单中的源（小黑屋）
+        if cfg.get("status") == "retired" or sid in _dead_blacklist:
+            LOG.info("源 %s 已退役/黑名单(blacklisted=%s, retired=%s)，跳过抓取。",
+                     sid, sid in _dead_blacklist, cfg.get("status") == "retired")
+            src_status[sid] = {"ok": True, "reason": "retired_or_blacklisted", "got": 0, "fresh": 0}
+            continue
         # P2：跳过显式禁用 / CI 不可达的源（如 reddit JSON、被数据中心 IP 封的 feed），
         # 既避免无谓的 403 抓取与 credit 自愈空耗，也避免触发"源抓取失败"误告警。
         if cfg.get("enabled") is False or cfg.get("ci_blocked"):
@@ -549,6 +579,27 @@ def main():
         SM.record_run(src_status)
     except Exception as e:
         LOG.warning("源指标记录失败（不影响主流程）: %s", e)
+
+    # 死源自动隔离：连续抓取失败达阈值（仅计 fetch_error）的源写入 dead_sources.json（小黑屋），
+    # 下次运行由主循环跳过，避免长期 403 源反复空耗 credit 与触发"源抓取失败"误告警。
+    try:
+        _changed = False
+        for _sid, _st in src_status.items():
+            if _st.get("reason") == "fetch_error":
+                _streak[_sid] = int(_streak.get(_sid, 0)) + 1
+            else:
+                _streak[_sid] = 0
+            if _streak.get(_sid, 0) >= DEAD_STREAK_THRESHOLD and _sid not in _dead_blacklist:
+                _dead_blacklist.add(_sid)
+                _changed = True
+                LOG.warning("⚠️ 源 %s 连续 %d 次抓取失败，已自动加入死源黑名单（小黑屋），"
+                            "下次运行跳过。恢复请清理 state/dead_sources.json。", _sid, DEAD_STREAK_THRESHOLD)
+        _streak = {k: v for k, v in _streak.items() if v > 0}
+        C.save_json(_streak_path, _streak)
+        if _changed:
+            C.save_json(_dead_path, sorted(_dead_blacklist))
+    except Exception as e:
+        LOG.warning("死源黑名单更新失败（不影响主流程）: %s", e)
 
     # 清理
     cleanup()
