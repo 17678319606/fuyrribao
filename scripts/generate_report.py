@@ -913,9 +913,16 @@ def _extract_json(text):
 
 def _validate(report):
     assert isinstance(report, dict), "顶层不是对象"
-    mods = report.get("modules", {})
+    mods = report.setdefault("modules", {})
     for key in ("project_opportunities", "growth_operations", "views_insights"):
-        assert key in mods, f"缺少模块 {key}"
+        if key not in mods:
+            # v5.1 容错：AI 偶发漏掉某个模块（如 fallback 模型只回 2 个模块），
+            # 不再「缺少即全盘丢弃」整份晚报——缺失模块按空数组处理，保留其余有效
+            # 模块照常发布；若全部模块皆空，由下游 final_total==0 安全护栏跳过发布，
+            # 避免空文章覆盖线上真实内容（同时避免整跑 0 产出）。
+            LOG.warning("模块 %s 缺失，按空模块处理（保留其余有效模块内容，不全盘丢弃）", key)
+            mods[key] = []
+            continue
         assert isinstance(mods[key], list), f"{key} 不是数组"
         # 容错：AI 偶发把某条 item 返回成纯字符串（而非对象），清洗为合格字典，
         # 否则 render_item 调 .get() 会 AttributeError 导致整跑崩溃（v4 run 即此坑）。
