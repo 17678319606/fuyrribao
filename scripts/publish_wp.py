@@ -472,6 +472,10 @@ def _emit_published_url(link):
                     _ef.write(f"PUBLISHED_URL={link}\n")
         except Exception:
             pass
+
+
+def main():
+    C.ensure_dirs()
     # 发布开关：FUYR_DISABLE_PUBLISH=1 时仅渲染不发布（用于 CNB 等副流水线，避免双 CI 同发一个 WP 造成重复/覆盖）。
     # 让 GitHub Actions 成为唯一发布方；CNB 仅做"生成+诊断"，互不打架。
     if os.environ.get("FUYR_DISABLE_PUBLISH", "").strip() in ("1", "true", "True", "yes"):
