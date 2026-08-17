@@ -57,6 +57,23 @@ TOPIC_LEXICON = [
     "blog", "hacker", "技术", "营销", "获客", "内容创作", "creator",
 ]
 
+# 已移除 / 应永久排除的种子（避免每周重新打分、重灌已知 403 / 已清退的源）。
+# reddit_* 曾因数据中心 IP 被 GitHub Actions 拦截（403）；theresanaiforthat 已主动删除。
+REMOVED_SEED_IDS = {
+    "reddit_sideproject", "reddit_indiehackers", "reddit_entrepreneur",
+    "reddit_artificial", "reddit_localllama", "reddit_selfhosted",
+    "theresanaiforthat",
+}
+REMOVED_SEED_URLS = {
+    "https://www.reddit.com/r/SideProject/hot.json?limit=25",
+    "https://www.reddit.com/r/indiehackers/hot.json?limit=25",
+    "https://www.reddit.com/r/Entrepreneur/hot.json?limit=25",
+    "https://www.reddit.com/r/artificial/hot.json?limit=25",
+    "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=25",
+    "https://www.reddit.com/r/selfhosted/hot.json?limit=25",
+    "https://theresanaiforthat.com/feed/",
+}
+
 # 权威域分级（命中得 4–5；未命中默认 3）
 AUTHORITY_TIERS = {
     "github.com": 5, "reddit.com": 4, "news.ycombinator.com": 5, "lobste.rs": 5,
@@ -75,24 +92,6 @@ STABILITY_BY_TYPE = {
 # 人工精选的高相关候选种子（复用现有解析器类型，零新增代码）。
 # 这些社区/聚合源"相关性高 + 官方/社区性质强 + 免费 + 标准协议"，契合"聚合社交媒体博主"诉求。
 CANDIDATE_SEEDS = [
-    {"id": "reddit_sideproject", "type": "reddit_json",
-     "url": "https://www.reddit.com/r/SideProject/hot.json?limit=25",
-     "name": "Reddit r/SideProject", "rationale": "独立开发者项目展示社区，高相关"},
-    {"id": "reddit_indiehackers", "type": "reddit_json",
-     "url": "https://www.reddit.com/r/indiehackers/hot.json?limit=25",
-     "name": "Reddit r/indiehackers", "rationale": "indie hacker 社区"},
-    {"id": "reddit_entrepreneur", "type": "reddit_json",
-     "url": "https://www.reddit.com/r/Entrepreneur/hot.json?limit=25",
-     "name": "Reddit r/Entrepreneur", "rationale": "创业/副业讨论社区"},
-    {"id": "reddit_artificial", "type": "reddit_json",
-     "url": "https://www.reddit.com/r/artificial/hot.json?limit=25",
-     "name": "Reddit r/artificial", "rationale": "AI 资讯社区，高相关"},
-    {"id": "reddit_localllama", "type": "reddit_json",
-     "url": "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=25",
-     "name": "Reddit r/LocalLLaMA", "rationale": "LLM/AI 工具实践"},
-    {"id": "reddit_selfhosted", "type": "reddit_json",
-     "url": "https://www.reddit.com/r/selfhosted/hot.json?limit=25",
-     "name": "Reddit r/selfhosted", "rationale": "自托管/技术副业"},
     {"id": "hn_show", "type": "rss", "url": "https://hnrss.org/show",
      "name": "Hacker News Show", "rationale": "HN 深度长文，质量高（同 host 已验证可用）"},
     {"id": "smashing", "type": "rss", "url": "https://www.smashingmagazine.com/feed/",
@@ -105,8 +104,6 @@ CANDIDATE_SEEDS = [
 CURATED_SEEDS = [
     {"id": "hn_best", "type": "rss", "url": "https://hnrss.org/best",
      "name": "Hacker News Best", "rationale": "HN 最高赞长文，质量天花板"},
-    {"id": "theresanaiforthat", "type": "rss", "url": "https://theresanaiforthat.com/feed/",
-     "name": "There's An AI For That", "rationale": "AI 工具聚合，强相关"},
     {"id": "lennys", "type": "rss", "url": "https://www.lennysnewsletter.com/feed",
      "name": "Lenny's Newsletter", "rationale": "产品/增长/职业高质量 newsletter"},
     {"id": "yc_blog", "type": "rss", "url": "https://www.ycombinator.com/blog/rss.xml",
@@ -450,7 +447,8 @@ def main():
             LOG.warning("OPML 参数解析失败: %s", e)
     # 去重：已在 sources.json 中的跳过
     candidates = [c for c in candidates
-                  if c.get("id") not in existing_ids and c.get("url") not in existing_urls]
+                  if c.get("id") not in existing_ids and c.get("url") not in existing_urls
+                  and c.get("id") not in REMOVED_SEED_IDS and c.get("url") not in REMOVED_SEED_URLS]
     # 已拒绝缓存：避免每周重复校验同一失败源浪费 CI（已接受/待审仍每轮复评）
     seen = C.load_json(SEEN_CACHE_FILE, {})
     rejected_seen = set(seen.get("rejected", []))
