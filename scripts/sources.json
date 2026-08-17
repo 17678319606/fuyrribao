@@ -149,15 +149,6 @@
     "name": "Hacker News Show"
   },
   {
-    "id": "smashing",
-    "type": "rss",
-    "url": "https://www.smashingmagazine.com/feed/",
-    "name": "Smashing Magazine",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "前端/工程高质量博客"
-  },
-  {
     "id": "hn_best",
     "type": "rss",
     "url": "https://hnrss.org/best",
@@ -203,15 +194,6 @@
     "rationale": "SaaS/创业增长高质量博客"
   },
   {
-    "id": "indiehackers_blog",
-    "type": "rss",
-    "url": "https://www.indiehackers.com/blog/rss",
-    "name": "Indie Hackers Blog",
-    "added_by": "curated",
-    "added_date": "2026-08-16",
-    "rationale": "独立开发者官方博客"
-  },
-  {
     "id": "spi",
     "type": "rss",
     "url": "https://www.smartpassiveincome.com/feed/",
@@ -239,6 +221,15 @@
     "rationale": "AI 产品/行业动态，高质量英文源"
   },
   {
+    "id": "marktechpost",
+    "type": "rss",
+    "url": "https://www.marktechpost.com/feed/",
+    "name": "MarkTechPost",
+    "added_by": "curated-replace",
+    "added_date": "2026-08-17",
+    "rationale": "AI/ML 研究与应用实战，强技术相关"
+  },
+  {
     "id": "simonwillison",
     "type": "rss",
     "url": "https://simonwillison.net/atom/everything/",
@@ -255,5 +246,47 @@
     "added_by": "curated-replace",
     "added_date": "2026-08-17",
     "rationale": "工程职业/行业趋势，补 reddit 的职场副业讨论"
+  },
+  {
+    "id": "sidehustlenation",
+    "type": "rss",
+    "url": "https://www.sidehustlenation.com/feed/",
+    "name": "Side Hustle Nation",
+    "rationale": "副业实操案例库，强相关"
+  },
+  {
+    "id": "starterstory",
+    "type": "rss",
+    "url": "https://www.starterstory.com/feed",
+    "name": "Starter Story",
+    "rationale": "独立产品赚钱案例，强相关"
+  },
+  {
+    "id": "importai",
+    "type": "rss",
+    "url": "https://importai.substack.com/feed",
+    "name": "Import AI",
+    "rationale": "AI 前沿周报（Substack，稳）"
+  },
+  {
+    "id": "flippa",
+    "type": "rss",
+    "url": "https://www.flippa.com/blog/feed",
+    "name": "Flippa Blog",
+    "rationale": "在线生意买卖/变现"
+  },
+  {
+    "id": "gumroad",
+    "type": "rss",
+    "url": "https://gumroad.com/blog?format=rss",
+    "name": "Gumroad Blog",
+    "rationale": "创作者变现"
+  },
+  {
+    "id": "backlinko",
+    "type": "rss",
+    "url": "https://backlinko.com/feed",
+    "name": "Backlinko",
+    "rationale": "SEO/增长获客"
   }
 ]
