@@ -84,7 +84,7 @@ jobs:
           python-version: '3.11'
 
       - name: 安装依赖
-        run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks
+        run: pip install --quiet requests beautifulsoup4 feedparser lxml pysocks Pillow
 
       - name: 注入 AI 限速器（免费 Gemini 配额保护，防 429）
         run: python scripts/patches/apply_rate_limit.py
@@ -189,6 +189,7 @@ jobs:
 
       - name: 源抓取失败告警（非致命）
         if: always()
+        continue-on-error: true
         run: |
           python - <<'PY'
           import os, json, urllib.request
@@ -224,6 +225,7 @@ jobs:
 
       - name: 心跳提交（防 60天停用 + 回写状态）
         if: always()
+        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
