@@ -1,0 +1,60 @@
+name: 删除WP文章（应急清理）
+
+# 用途：经 workflow_dispatch 调用 WordPress REST API 删除指定文章。
+# 凭据全部走 GitHub Secrets（WP_APP_PASSWORD），绝不硬编码；WP_URL / WP_USER 缺失时回退默认值。
+# 默认 dry_run=true 仅查询，确认无误后以 dry_run=false 真实删除（force=true 永久删除，不经过回收站）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      post_id:
+        description: '要删除的 WP 文章 ID（来自 URL，如 dajiayouxuan.com/13469.html → 13469）'
+        required: true
+        default: '13469'
+      dry_run:
+        description: 'true=仅查询标题/状态不删除；false=真实永久删除'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WP_URL: ${{ secrets.WP_URL || 'https://dajiayouxuan.com' }}
+      WP_USER: ${{ secrets.WP_USER || 'tougao' }}
+      WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+    steps:
+      - name: 查询并删除指定 WP 文章
+        run: |
+          pip install --quiet requests
+          python - <<'PY'
+          import os, base64, sys, requests
+          wp = os.environ["WP_URL"].rstrip("/")
+          auth = {"Authorization": "Basic " + base64.b64encode(
+              f'{os.environ["WP_USER"]}:{os.environ["WP_APP_PASSWORD"]}'.encode()).decode()}
+          pid = "${{ github.event.inputs.post_id }}".strip()
+          dry = "${{ github.event.inputs.dry_run }}" == "true"
+          try:
+              r = requests.get(f"{wp}/wp-json/wp/v2/posts/{pid}", headers=auth, timeout=30)
+              r.raise_for_status()
+              p = r.json()
+          except Exception as e:
+              print("❌ 查询文章失败（可能 ID 不存在 / 凭据无权 / 站点不可达）：", e)
+              sys.exit(1)
+          print("目标文章 ID=%s | 标题=%s | 状态=%s | link=%s" % (
+              p.get("id"), p.get("title", {}).get("rendered"), p.get("status"), p.get("link")))
+          if dry:
+              print("dry_run=true：未删除。确认无误后请以 dry_run=false 重新触发本工作流。")
+              sys.exit(0)
+          try:
+              d = requests.delete(f"{wp}/wp-json/wp/v2/posts/{pid}?force=true", headers=auth, timeout=30)
+              d.raise_for_status()
+              print("✅ 已永久删除文章 ID=%s（不经过回收站）" % pid)
+          except Exception as e:
+              print("❌ 删除失败（多半是 WP 用户角色无 delete_posts 权限）：", e)
+              sys.exit(1)
+          PY
