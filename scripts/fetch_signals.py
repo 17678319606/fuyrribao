@@ -322,10 +322,11 @@ def parse_repo_base(cfg):
     except Exception as e:
         LOG.warning("repo_base 读取失败 %s: %s", name, e)
         raise
-    for item in items:
+    for idx, item in enumerate(items):
         if not isinstance(item, dict) or not item.get("title"):
             continue
         out.append({
+            "id": item.get("id") or f"repo://{cfg.get('id','')}/{idx}",
             "source_id": cfg.get("id", "repo_base"),
             "source_name": name,
             "source_url": item.get("source_url", f"repo://{cfg.get('id','')}"),
@@ -702,7 +703,11 @@ def main():
     # 下次运行由主循环跳过，避免长期 403 源反复空耗 credit 与触发"源抓取失败"误告警。
     try:
         _changed = False
+        _fixed_ids = {s.get("id") for s in sources if s.get("fixed") or s.get("pinned")}
         for _sid, _st in src_status.items():
+            if _sid in _fixed_ids:
+                _streak[_sid] = 0
+                continue
             if _st.get("reason") == "fetch_error":
                 _streak[_sid] = int(_streak.get(_sid, 0)) + 1
             else:
