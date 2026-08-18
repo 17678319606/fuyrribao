@@ -1,0 +1,141 @@
+# scripts/ad_filter.py
+"""硬安全闸：代码侧零 LLM 成本的广告/博彩/引流/违法内容过滤器。
+必须在 AI 调用前、且在 zhongnianren exempt_views（人情味豁免）之前无条件运行（双闸）。
+
+设计原则：
+1. 安全 > 人情味：任何源的博彩/引流/违法内容都不因"聚合源豁免"被发布。
+2. 零 LLM 成本：纯正则，跑在送 AI 前与生成后，反而因提前丢垃圾而省 token。
+3. 双闸纵深防御：① 送 AI 前对 raw 信号过闸；② 生成后对 report JSON 过闸。
+4. 高精低误杀：正则按违规特征分组，仅匹配明确违规，避免误伤正常搞钱内容。
+5. 可单测：纯函数，喂线上真实样本做回归断言。
+"""
+import re
+
+# —— 博彩 / 赌博 / 黑产（高精，绝不豁免）——
+_GAMBLING = re.compile(
+    r"(博彩|六合彩|49倍|加拿大28|加拿大二八|PG电子|PG娱乐|娱乐城|贵宾会|百家乐|"
+    r"外围盘|外围赌|网赌|赌球|赌马|开奖|返水|上押|黑台|野鸡|菠菜|棋牌|投注|下注|"
+    r"铂莱|750\.cc|bet\.|casino|gamble|博彩信誉|担保上押)",
+    re.IGNORECASE,
+)
+# —— 引流 / 联系方式（高精）——
+# 注意：刻意不收录裸「二维码」——赞赏区「扫描二维码」「微信赞赏码」属正常内容，
+# 误杀会污染 QA；二维码单独出现无法判定为引流，故仅匹配明确的加好友/加群话术。
+# 同时收紧「微信：」——新闻标题「微信：朋友圈…」会被裸「微信：」误伤，
+# 故仅当冒号后紧跟 4-20 位字母/数字（典型微信号）时才命中，正常中文标题不误杀。
+_PROMO_CONTACT = re.compile(
+    r"(加微信|微信号|微信(号|：\s*[A-Za-z0-9_\-]{4,20})|薇信|客服微信|"
+    r"扫码关注|扫码免费领|私聊客服|小妹|"
+    r"t\.me/|电报群|TG群|telegram\.me)",
+    re.IGNORECASE,
+)
+# —— 拉人 / affiliate 话术（高精）——
+_RECRUIT = re.compile(
+    r"(全民代理|全民收单|代理佣金|邀请返利|注册送.*额度|首充.*送|充值送|日赚|月入过万|"
+    r"稳赚不赔|一夜暴富|躺赚|被动收入|兼职日结)",
+    re.IGNORECASE,
+)
+# —— Telegram 拉人频道（@xxx / @xxxbot）——
+_TG = re.compile(r"@([A-Za-z0-9_]{3,}|[A-Za-z0-9_]{2,}bot)\b")
+
+# —— 禁词库（极限词 / 广告法第九条禁用词）——
+# 国内广告法严禁绝对化用语；这些词出现于标题/正文即构成违规风险，故纳入广告过滤模块。
+# 处置策略为「清洗(scrub)」而非「硬删整条」，避免误杀正常搞钱内容（仅抹除违规绝对化表达）。
+EXTREME_WORDS = ['最好', '最大', '最强', '最高', '最低', '最优', '最全', '最专业', '最权威', '最先进', '最受欢迎', '最便宜', '最划算', '最值得', '最顶级', '最牛', '最火', '最靠谱', '最实用', '最安全', '最快', '最省', '顶级', '极致', '极品', '第一品牌', '第一选择', '第一推荐', '销量第一', '排名第一', '行业第一', '全国第一', '全球第一', '世界第一', '全网第一', '唯一', '绝无仅有', '史无前例', '空前', '空前绝后', '绝后', '万能', '百分之百', '100%', '零风险', '零失败', '零事故', '首选', '王牌', '金牌', '领导品牌', '领头羊', '国家级', '世界级', '全球级', '独家', '首发', '全网最低', '全网最低价', '至尊', '巅峰', '登峰造极', '举世无双', '无与伦比', '无可比拟', '称霸', '霸主', '王者', '帝王', '皇家', '奢华', '尊贵', '驰名商标', '中国驰名', '国家免检', '免检', '首创', '唯一授权', '宇宙第一', '独步天下', '傲视群雄', '神级', '终极', '封神', '完美', '完美无缺', '顶尖', '尖端', '一绝']
+EXTREME_MAP = {'最好': '很好', '最大': '很大', '最强': '很强', '最高': '很高', '最低': '较低', '最优': '很好', '最全': '较全', '最专业': '很专业', '最权威': '较权威', '最先进': '较先进', '最受欢迎': '受很多读者欢迎', '最便宜': '便宜', '最划算': '划算', '最值得': '值得', '最顶级': '优秀', '最牛': '不错', '最火': '热门', '最靠谱': '靠谱', '最实用': '实用', '最安全': '安全', '最快': '较快', '最省': '省', '顶级': '优秀', '极致': '出色', '极品': '精品', '第一品牌': '知名品牌', '第一选择': '推荐选择', '第一推荐': '推荐', '销量第一': '销量领先', '排名第一': '排名靠前', '行业第一': '行业领先', '全国第一': '全国领先', '全球第一': '全球领先', '世界第一': '世界领先', '全网第一': '全网领先', '唯一': '少有', '绝无仅有': '很少见', '史无前例': '少见', '空前': '少见', '空前绝后': '少见', '绝后': '少见', '万能': '多能', '百分之百': '', '100%': '', '零风险': '低风险', '零失败': '低失败', '零事故': '低事故', '首选': '推荐', '王牌': '主力', '金牌': '优秀', '领导品牌': '知名品牌', '领头羊': '领先者', '国家级': '', '世界级': '', '全球级': '', '独家': '', '首发': '', '全网最低': '低价', '全网最低价': '低价', '至尊': '尊贵', '巅峰': '高水平', '登峰造极': '高水平', '举世无双': '罕见', '无与伦比': '少见', '无可比拟': '少见', '称霸': '领先', '霸主': '领先者', '王者': '领先者', '帝王': '', '皇家': '', '奢华': '高档', '尊贵': '高档', '驰名商标': '知名', '中国驰名': '知名', '国家免检': '', '免检': '', '首创': '早创', '唯一授权': '授权', '宇宙第一': '领先', '独步天下': '领先', '傲视群雄': '领先', '神级': '高级', '终极': '最终', '封神': '出色', '完美': '出色', '完美无缺': '出色', '顶尖': '优秀', '尖端': '先进', '一绝': '出色'}
+_EXTREME_PAT_SORTED = sorted(EXTREME_WORDS, key=len, reverse=True)
+_EXTREME = re.compile("|".join(re.escape(w) for w in _EXTREME_PAT_SORTED))
+
+
+def has_extreme(text):
+    """是否含极限词/广告法禁用词（用于可观测统计，不直接丢弃）。"""
+    if not text:
+        return False
+    return bool(_EXTREME.search(text))
+
+
+def scrub_extreme(text):
+    """清洗极限词：替换为中性词或删去。仅抹除违规绝对化表达，不改变其余内容。"""
+    if not text or not isinstance(text, str):
+        return text
+    return _EXTREME.sub(lambda m: EXTREME_MAP.get(m.group(0), ""), text)
+
+
+# —— 超短极限/促销套路观测（去套路化用，仅可观测，不直接硬删）——
+_LIMIT_WORDS = 20  # 超短阈值（字符数）
+
+
+def is_limit_word(text, limit=_LIMIT_WORDS):
+    """去套路化观测：超短文本（≤ limit 字符）且含高密极限/促销/引流信号 → 标记套路化嫌疑。
+
+    仅作可观测统计（供巡检指标与前端去套路化呈现），**不直接硬删**——
+    硬删由 safety_hard_filter 命中真实违规类别（博彩/引流/自推）触发。
+    """
+    if not text or not isinstance(text, str):
+        return False
+    if len(text) > limit:
+        return False
+    return bool(_EXTREME.search(text)) or bool(_PROMO_CONTACT.search(text)) or bool(_RECRUIT.search(text))
+
+_SAFETY_GROUPS = {
+    "gambling": _GAMBLING,
+    "promo_contact": _PROMO_CONTACT,
+    "recruit": _RECRUIT,
+    "tg_recruit": _TG,
+}
+
+# —— 自推 / 推广标记（标题或正文含即硬删）——
+_PROMO_TITLE = re.compile(r"^\s*\[推广\]|【推广】|\(推广\)|\[AD\]|\[广告\]", re.IGNORECASE)
+_SELF_PROMO = re.compile(
+    r"(我(的|们)?(朋友|自己|小)?(弄|做|搞|搭建|开了).{0,8}(小站|中转|平台|站点|API)|"
+    r"网友注册送|自家(的)?(API|中转|平台)|个人(的)?(中转|API)|V2EX网友)",
+    re.IGNORECASE,
+)
+
+# —— emoji 刷屏标题 ——
+_EMOJI = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U0001F02F"
+    "\U0000FE00-\U0000FE0F\U0000200D]"
+)
+
+
+def is_emoji_spam(text, threshold=0.6):
+    """标题去空白后非 emoji 字符占比过低 → 刷屏。"""
+    if not text or len(text) <= 1:
+        return False
+    non_emoji = re.sub(_EMOJI, "", text)
+    letters = re.sub(r"\s", "", non_emoji)
+    emoji_count = len(text) - len(non_emoji)
+    return (emoji_count / len(text)) >= threshold and len(letters) < 3
+
+
+# —— 未填模板占位符（如 「来源：Dev.to 未闭合）——
+_PLACEHOLDER = re.compile(r"「来源：[^」\n]{1,30}(?!\」)")
+
+
+def safety_hard_filter(text):
+    """返回命中的违规类别列表；空列表=安全。无条件优先于 exempt。
+
+    注意：极限词（广告法禁用词）不在此处硬删——仅作可观测，清洗由
+    generate_report 的 scrub_extreme 分支完成。本函数只命中真实违规类别
+    （博彩/引流/自推/emoji 等），返回非空即触发硬删。
+    """
+    if not text:
+        return []
+    hits = []
+    for name, pat in _SAFETY_GROUPS.items():
+        if pat.search(text):
+            hits.append(name)
+    if _PROMO_TITLE.search(text):
+        hits.append("promo_tag")
+    if _SELF_PROMO.search(text):
+        hits.append("self_promo")
+    return hits
+
+
+def is_promo(text):
+    return bool(_PROMO_TITLE.search(text) or _SELF_PROMO.search(text))
+
+
+def has_placeholder(text):
+    return bool(_PLACEHOLDER.search(text))

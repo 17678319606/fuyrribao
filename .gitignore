@@ -1,0 +1,30 @@
+__pycache__/
+*.pyc
+# 运行时产物隔离说明：
+# - data/：采集候选/报告等，由 workflow 在 runner 本地生成，不进 git。
+# - state/ 中仅 state/heartbeat.txt 提交（防 GitHub 60 天停用；内容恒定→历史近零增长）。
+#   state/seen.json（跨天去重表）与 state/cid_readme_snapshot.txt（CID 增量基线）改为走
+#   GitHub Actions 缓存持久化（见 workflow 的 actions/cache），不再提交，
+#   避免仓库容量随每日运行无限增长而被收费。
+# - state/source_status.json、state/last_posted.json：临时诊断，不持久化。
+# - state/daily_report_*.json：当日增量累积日报（跨运行保留，走 Actions 缓存，不提交）。
+# - state/.gen_changed：generate→publish 的变更标记，不提交。
+# - state/source_metrics.json、source_actions.json、source_credit_review.json、source_discovery_log.json：
+#   源征信 / 发现运行时诊断产物，本地生成不入库。
+# - state/source_diversity.json：源多样性体检产物（diversity_report 输出），本地生成不入库。
+# - state/republished.json：单条二次发布去重记录（运行时累积），不入库。
+data/
+state/seen.json
+state/cid_readme_snapshot.txt
+state/source_status.json
+state/last_posted.json
+state/daily_report_*.json
+state/.gen_changed
+state/source_metrics.json
+state/source_actions.json
+state/source_credit_review.json
+state/source_discovery_log.json
+state/source_diversity.json
+state/republished.json
+# 含真实密钥的本地交付模板，禁止入库
+env.fuyrribao.clean.yml

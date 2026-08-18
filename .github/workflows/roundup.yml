@@ -1,0 +1,81 @@
+# 副业日报·主题合集（周更，低频独立发布方）
+# ─────────────────────────────────────────────────────────────────────
+# 触发：每周日 北京时间 20:30 自动生成一期；也可手动 workflow_dispatch。
+# 与 daily-report.yml 使用不同 concurrency 组，互不阻塞；共享 state/ 缓存以读取 items_store。
+# 安全护栏：条目不足阈值 / AI 退化（HTML 过短）则跳过，绝不发薄页。
+name: 副业日报主题合集
+
+on:
+  schedule:
+    # UTC 12:30 = 北京时间 20:30（周日）
+    - cron: "30 12 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuyrribao-roundup
+  cancel-in-progress: false
+
+env:
+  DOCGEN_EMERGENCY: ${{ github.event.inputs.emergency == 'true' && '1' || '' }}
+  TZ: Asia/Shanghai
+  WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+  # —— AI 主用 Gemini 原生 API；璇玑兜底（与 daily-report.yml 保持一致）——
+  # —— AI 后端：唯一使用 jinbufenzi 国内网关（OpenAI 兼容），AI_SIDEHUSTLE_API_KEY 鉴权 ——
+  AI_BASE_URL: "https://ai.jinbufenzi.com/v1"
+  AI_MODEL: "auto"
+  AI_API_KEY: ${{ secrets.AI_SIDEHUSTLE_API_KEY }}
+  WXWORK_WEBHOOK: ${{ secrets.WXWORK_WEBHOOK }}
+
+jobs:
+  roundup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install --quiet requests
+
+      - name: 恢复状态缓存（含 items_store.jsonl）
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state/
+          key: fuyrribao-state-${{ github.run_id }}
+          restore-keys: |
+            fuyrribao-state-
+
+      - name: 生成并发布主题合集
+        run: python scripts/generate_roundup.py
+
+      - name: 发布后合规扫描（命中博彩/引流即自动删帖并告警）
+        if: success()
+        run: python scripts/wp_safety_scan.py
+
+      - name: 保存状态缓存
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state/
+          key: fuyrribao-state-${{ github.run_id }}
+
+      - name: 失败通知（企业微信）
+        if: failure()
+        run: |
+          URL="${{ secrets.WXWORK_WEBHOOK || '<WXWORK_WEBHOOK_PLACEHOLDER>' }}"
+          if [ "$URL" = "<WXWORK_WEBHOOK_PLACEHOLDER>" ]; then exit 0; fi
+          curl -s -o /dev/null -X POST "$URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"msgtype\":\"text\",\"text\":{\"content\":\"【副业日报·主题合集】本周生成失败，请检查。\"}}"
