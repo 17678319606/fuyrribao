@@ -1,15 +1,5 @@
 [
   {
-    "id": "fuye_base",
-    "type": "repo_base",
-    "path": "data/base_content.json",
-    "name": "副业日报基础库",
-    "pinned": true,
-    "quota": "pinned",
-    "fixed": true,
-    "rationale": "仓库内置 curated 基础内容源（免信用排名/不参与淘汰）。优先采用，保障日报内容底线质量。内容手动或半自动维护于 data/base_content.json。"
-  },
-  {
     "id": "zhongnianren",
     "type": "rss",
     "url": "https://17678319606.github.io/tg-aggregator-cn-snapshot/zhongnianren/rss.xml",
@@ -298,5 +288,15 @@
     "url": "https://backlinko.com/feed",
     "name": "Backlinko",
     "rationale": "SEO/增长获客"
+  },
+  {
+    "id": "daily_json",
+    "type": "json_url",
+    "url": "https://raw.githubusercontent.com/17678319606/fuyrribao/main/data/rss/daily.json",
+    "name": "副业日报自聚合源（daily.json）",
+    "pinned": true,
+    "quota": "pinned",
+    "fixed": true,
+    "rationale": "自仓聚合源：复用本仓库每日生成的 daily.json 作为固定基础源（地基），与 中年指南/中文独立开发者 共同保障内容不空；正常日与实时源按 url 去重、仅在实时源缺失时回补。"
   }
 ]

@@ -142,6 +142,13 @@ S_FIELD_TEXT = ("font-size:15.5px;color:#3a3a3a;margin:0;line-height:1.85;overfl
 
 S_BULLET = "color:#2f6b5e;"  # 字段标签前的 ▪ 点
 
+# 观点心法(m3) 原文引用块：不改写优质原创内容，用引用块突出展示（价值主张区）
+S_QUOTE = ("background:#f3f1ea;border-left:3px solid #b9a06a;border-radius:0 10px 10px 0;"
+           "padding:14px 18px;margin-top:16px;")
+S_QUOTE_LABEL = "font-size:12px;font-weight:700;letter-spacing:1px;color:#8a7440;margin:0 0 6px;"
+S_QUOTE_TEXT = ("font-size:15px;color:#4a4031;margin:0;line-height:1.85;font-style:italic;"
+                "overflow-wrap:break-word;word-break:break-word;white-space:pre-wrap;")
+
 S_MONEY = ("background:#e9f5ef;border:1px solid #9fd4bc;border-left:3px solid #0f7a52;"
 
            "border-radius:0 12px 12px 0;padding:15px 20px;margin-top:16px;")
@@ -312,6 +319,30 @@ def _esc(s):
     return html_lib.escape(str(s)) if s else ""
 
 
+# 常见"伪空"占位：AI 常把字段填成 N/A / 无 / 暂无 / — 等字面值，
+# 渲染器若按"非空"处理会把整段无意义占位显示出来，拖累阅读。
+# 这些字面值应视为空（不展示该字段）。
+_BLANK_TOKENS = {
+    "", "n/a", "na", "n.a.", "无", "无内容", "暂无", "暂无内容", "暂无相关信息",
+    "不适用", "未知", "未提供", "未提及", "无信息", "待补充", "待定",
+    "详见原文", "none", "null", "x", "×", "✕",
+}
+
+
+def _is_blank(val):
+    """True 表示字段应视为空（不展示）：真无值 或 仅含占位词（N/A/无/暂无/—…）。"""
+    if val is None:
+        return True
+    s = str(val).strip()
+    if not s:
+        return True
+    # 归一：去掉空白与常见占位标点后比较（"N/A" "N／A" "—" "暂无。" 等都被识别为占位）
+    norm = s.lower()
+    for ch in " \t\r\n-—–・·/\\|～~…。，．、；：！？.,\"'":
+        norm = norm.replace(ch, "")
+    return norm in _BLANK_TOKENS
+
+
 
 
 
@@ -333,15 +364,27 @@ def render_item(it, modcls):
 
 
 
-    rows = ""
+    # 观点心法(m3)：优质原创内容不改写 → 原文引用优先展示（价值主张区）
+    quote_html = ""
+    if modcls == "m3":
+        q = it.get("quote_original", "")
+        if q and not _is_blank(q):
+            quote_html = (
+                f'<div style="{S_QUOTE}">\n'
+                f'<div style="{S_QUOTE_LABEL}">原文引用 · 不改写</div>\n'
+                f'<blockquote style="{S_QUOTE_TEXT}">{_esc(str(q).strip())}</blockquote>\n'
+                f'</div>\n'
+            )
+
+    rows = quote_html
 
     for key, label in CANVAS_FIELDS:
 
         val = it.get(key)
 
-        if not val or not str(val).strip():
+        if _is_blank(val):
 
-            continue  # 空字段：跳过，不输出标题也不占位
+            continue  # 空字段 / 伪空占位(N/A/无/暂无/—)：跳过，不输出标题也不占位
 
 
 
