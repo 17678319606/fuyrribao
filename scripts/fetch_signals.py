@@ -374,7 +374,7 @@ def parse_json_url(cfg):
             continue
         out.append({
             "id": "jsonurl:" + str(art.get("id") or art_url),
-            "source_id": cfg.get("id", "json_url"),
+            "source_id": art.get("source_id") or cfg.get("id", "json_url"),
             "source_name": art.get("source_name") or name,
             "source_url": art_url,
             "title": _clean_text(art_title),
