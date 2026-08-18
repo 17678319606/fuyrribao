@@ -333,7 +333,7 @@ def _safe_url(u):
 _BLANK_TOKENS = {
     "", "n/a", "na", "n.a.", "无", "无内容", "暂无", "暂无内容", "暂无相关信息",
     "不适用", "未知", "未提供", "未提及", "无信息", "待补充", "待定",
-    "详见原文", "none", "null", "x", "×", "✕",
+    "详见原文", "暂无数据", "暂无评论", "none", "null", "x", "×", "✕",
 }
 
 
@@ -341,7 +341,7 @@ def _is_blank(val):
     """True 表示字段应视为空（不展示）：真无值 或 仅含占位词（N/A/无/暂无/—…）。"""
     if val is None:
         return True
-    s = str(val).strip()
+    s = str(val).replace("\u3000", " ").replace("（", "").replace("）", "").replace("(", "").replace(")", "").strip()
     if not s:
         return True
     # 归一：去掉空白与常见占位标点后比较（"N/A" "N／A" "—" "暂无。" 等都被识别为占位）
@@ -368,7 +368,7 @@ def render_item(it, modcls):
 
     src_name = _esc(it.get("source_name", ""))
 
-    src_url = it.get("source_url", "")
+    src_url = _safe_url(it.get("source_url", ""))
 
 
 
