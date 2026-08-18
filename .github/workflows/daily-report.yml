@@ -290,7 +290,10 @@ jobs:
             MSG="❌ **副业日报流水线失败**（${BJ_TIME} 北京时间）
             > 请尽快检查：[查看运行](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           fi
-          curl -s -o /dev/null -X POST "$URL" \
+          if curl -s -f -o /dev/null -X POST "$URL" \
             -H "Content-Type: application/json" \
-            -d "$(python3 -c "import json;print(json.dumps({'msgtype':'markdown','markdown':{'content':'''$MSG'''}}))")"
-          echo "通知已发送（result=$RESULT, is_final=$IS_FINAL)"
+            -d "$(python3 -c "import json;print(json.dumps({'msgtype':'markdown','markdown':{'content':'''$MSG'''}}))")"; then
+            echo "通知已发送（result=$RESULT, is_final=$IS_FINAL)"
+          else
+            echo "⚠️ 企业微信通知推送失败（Webhook 返回非 2xx，已忽略）"
+          fi
