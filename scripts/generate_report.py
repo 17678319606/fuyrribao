@@ -839,6 +839,7 @@ def _extract_json(text):
         parsed = _parse_lenient_json(s[start:end + 1])
         if parsed is not None:
             return parsed
+    LOG.warning("流式被截断，已兜底 salvage 部分条目（内容可能不完整，非完整日报）")
     return _salvage_truncated(s[start:])
 
 
