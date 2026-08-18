@@ -322,6 +322,14 @@ def _esc(s):
 # 常见"伪空"占位：AI 常把字段填成 N/A / 无 / 暂无 / — 等字面值，
 # 渲染器若按"非空"处理会把整段无意义占位显示出来，拖累阅读。
 # 这些字面值应视为空（不展示该字段）。
+
+def _safe_url(u):
+    """仅放行 http/https 链接，过滤 javascript:/data:/vbscript: 等危险 scheme，防 XSS。"""
+    u = str(u or "").strip()
+    ul = u.lower()
+    return u if (ul.startswith("http://") or ul.startswith("https://")) else ""
+
+
 _BLANK_TOKENS = {
     "", "n/a", "na", "n.a.", "无", "无内容", "暂无", "暂无内容", "暂无相关信息",
     "不适用", "未知", "未提供", "未提及", "无信息", "待补充", "待定",
