@@ -28,3 +28,6 @@ state/source_diversity.json
 state/republished.json
 # 含真实密钥的本地交付模板，禁止入库
 env.fuyrribao.clean.yml
+# 明文 PAT（trigger_daily.sh 读取）与锁文件，切勿提交
+.gh_pat
+.trigger.lock

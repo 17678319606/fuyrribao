@@ -322,10 +322,18 @@ def _esc(s):
 # 常见"伪空"占位：AI 常把字段填成 N/A / 无 / 暂无 / — 等字面值，
 # 渲染器若按"非空"处理会把整段无意义占位显示出来，拖累阅读。
 # 这些字面值应视为空（不展示该字段）。
+
+def _safe_url(u):
+    """仅放行 http/https 链接，过滤 javascript:/data:/vbscript: 等危险 scheme，防 XSS。"""
+    u = str(u or "").strip()
+    ul = u.lower()
+    return u if (ul.startswith("http://") or ul.startswith("https://")) else ""
+
+
 _BLANK_TOKENS = {
     "", "n/a", "na", "n.a.", "无", "无内容", "暂无", "暂无内容", "暂无相关信息",
     "不适用", "未知", "未提供", "未提及", "无信息", "待补充", "待定",
-    "详见原文", "none", "null", "x", "×", "✕",
+    "详见原文", "暂无数据", "暂无评论", "none", "null", "x", "×", "✕",
 }
 
 
@@ -333,7 +341,7 @@ def _is_blank(val):
     """True 表示字段应视为空（不展示）：真无值 或 仅含占位词（N/A/无/暂无/—…）。"""
     if val is None:
         return True
-    s = str(val).strip()
+    s = str(val).replace("\u3000", " ").replace("（", "").replace("）", "").replace("(", "").replace(")", "").strip()
     if not s:
         return True
     # 归一：去掉空白与常见占位标点后比较（"N/A" "N／A" "—" "暂无。" 等都被识别为占位）
@@ -360,7 +368,7 @@ def render_item(it, modcls):
 
     src_name = _esc(it.get("source_name", ""))
 
-    src_url = it.get("source_url", "")
+    src_url = _safe_url(it.get("source_url", ""))
 
 
 
