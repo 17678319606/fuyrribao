@@ -1,0 +1,42 @@
+name: RSS archive sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 06:00 and 19:00 Asia/Shanghai = 22:00 and 11:00 UTC.
+    - cron: '0 22 * * *'
+    - cron: '0 11 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rss-archive
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install RSS dependencies
+        run: pip install --quiet requests feedparser
+      - name: Fetch last 24 hours and diagnose sources
+        run: python scripts/rss_archive.py
+      - name: Commit stable feed
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/rss/daily.json
+          git diff --cached --quiet || git commit -m 'chore: refresh 24h RSS archive'
+          git pull --rebase origin main
+          git push origin main
