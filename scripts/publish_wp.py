@@ -860,6 +860,8 @@ def find_existing_post(session, base, auth, today):
 
     found = []
 
+    query_failures = []
+
     for st in ("publish", "trash"):
 
         try:
@@ -877,6 +879,15 @@ def find_existing_post(session, base, auth, today):
         except Exception as e:
 
             LOG.warning("查询已存在文章(%s)失败：%s", st, e)
+
+            query_failures.append(st)
+
+    # 防双发关键：publish 主查询失败时绝不能当作"无文章"继续新建——
+    # 否则网络抖动会让重试轮创建第二篇同日文章（2026-08-19 实测双发）。
+    # 宁可本次中止发布（由工作流 90s 后重试），也不允许重复发文。
+    if "publish" in query_failures:
+
+        raise RuntimeError("查重失败(publish 查询异常)，中止发布以防同日重复文章")
 
     for p in found:
 
