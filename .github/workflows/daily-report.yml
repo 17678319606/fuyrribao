@@ -16,9 +16,14 @@
 name: 副业日报每日生成
 
 on:
-  # 单发布方治理：本 workflow 无自有 schedule，避免与任何定时源重复发稿。
-  # 日常自动化由宝塔 trigger_daily.sh 每日 19:00（北京时间）经 workflow_dispatch 触发；
-  # CNB 流水线仅做诊断（FUYR_DISABLE_PUBLISH=1），GitHub Actions 为唯一发布方。
+  # 触发治理：
+  #   1. 宝塔 trigger_daily.sh 每日 19:00（北京时间）workflow_dispatch —— 主触发（若已部署）
+  #   2. 本工作流自带 schedule 19:40（北京）—— 平台级最终兜底：即使服务器/PAT 全部失效，
+  #      也能保证每日自动出报；与宝塔触发并发时由 concurrency 组 + 同日增量累积/去重防双发。
+  #   3. CNB 流水线仅做诊断（FUYR_DISABLE_PUBLISH=1），GitHub Actions 为唯一发布方。
+  schedule:
+    # 北京时间 19:40 = UTC 11:40（末次兜底）
+    - cron: '40 11 * * *'
   workflow_dispatch:
     inputs:
       force:
